@@ -1,0 +1,22 @@
+clientName: sdsmu #客户 ID
+port: 8700
+nats:
+  endpoint: nats://1.94.184.24:4222 #nats://127.0.0.1:42222 #nats://170.18.9.86:4222
+  webplusStreamName: webplus_stream
+  consumerName: push_consumer
+  subjectName: sudy.webplus.notify.dreamertest-sudy.zyxxlyg.columnAndArticleChange
+
+  defaultAccountName: cm
+  account:
+    cm:
+      username: ""
+      password: ""
+      seed: "SUAG5FS7H253CMJBZFATMT4E4CLPA22AX37DBUAGF3JPK4EJ7TQ7LBQ4LM"
+      nkey: "UBUGBPDHPW44AA4I6YNUDJ4GFRSMNJFNMU64BMBJTQDXLLACII5CSXTP"
+db:
+  host: 127.0.0.1 #170.18.9.182
+  port: 3306
+  username: root
+  password: "12344"
+  database: 3062
+  maxConnections: 600
