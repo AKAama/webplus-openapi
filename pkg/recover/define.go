@@ -8,9 +8,8 @@ import (
 
 // ArticleRef 简化结构，用于获取ID
 type ArticleRef struct {
-	ID       string `gorm:"column:id"`        // 对应Article.ArticleId
-	SiteID   string `gorm:"column:site_id"`   // 对应Article.SiteId
-	ColumnID string `gorm:"column:column_id"` // 对应Article.PublishColumnId
+	ID     string `gorm:"column:id"`      // 对应Article.ArticleId
+	SiteID string `gorm:"column:site_id"` // 对应Article.SiteId
 }
 
 // Params RecoverParams 恢复参数

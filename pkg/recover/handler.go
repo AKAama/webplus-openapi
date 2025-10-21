@@ -75,26 +75,16 @@ func (s *Service) validateParams(params Params) error {
 		zap.S().Infof("使用默认Worker池大小: %d", params.WorkerPoolSize)
 	}
 
-	// 验证站点ID格式（如果提供）
-	if params.SiteID != "" && len(params.SiteID) < 3 {
-		return errors.New("站点ID格式不正确")
-	}
-
-	// 验证栏目ID格式（如果提供）
-	if params.ColumnID != "" && len(params.ColumnID) < 3 {
-		return errors.New("栏目ID格式不正确")
-	}
-
 	return nil
 }
 
 // GetAllArticleRefs 获取所有需要恢复的文章引用
 func (r *ArticleRepository) GetAllArticleRefs(params Params) ([]ArticleRef, error) {
 	query := r.db.Table("T_ARTICLE ta").
-		Select("ta.id, tsa.siteId as site_id, tc.id as column_id").
+		Select("ta.id, tsa.siteId as site_id").
 		Joins("JOIN T_SITEARTICLE tsa ON ta.id = tsa.publishArticleId").
 		Joins("JOIN T_COLUMN tc ON tc.SyncFolderId = ta.folderId").
-		Where("tsa.selfCreate = ?", 1)
+		Where("tsa.published = ? AND tsa.selfCreate = ? AND ta.deleted = ? AND ta.archived = ?", 1, 1, 0, 0)
 
 	// 添加站点过滤条件（空字符串表示所有站点）
 	if params.SiteID != "" {
@@ -372,11 +362,9 @@ func (as *ArticleService) processArticle(articleRef ArticleRef) ProcessResult {
 		return ProcessResult{Status: fmt.Sprintf("检查文章存在性失败: %v", err)}
 	}
 
-	// 创建Article对象
+	// 创建Article对象（仅携带ID；站点与栏目从数据库计算）
 	article := &models.ArticleInfo{
 		ArticleId: articleRef.ID,
-		SiteId:    articleRef.SiteID,
-		ColumnId:  articleRef.ColumnID,
 	}
 
 	// 查询文章详情
@@ -386,7 +374,7 @@ func (as *ArticleService) processArticle(articleRef ArticleRef) ProcessResult {
 	}
 
 	// 修复文章访问地址
-	articleInfo, err = as.repo.RestoreArticleInfos(articleInfo, article)
+	articleInfo, err = as.repo.RestoreArticleInfos(articleInfo)
 	if err != nil {
 		return ProcessResult{Status: fmt.Sprintf("修复文章访问地址失败: %v", err)}
 	}

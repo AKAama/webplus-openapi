@@ -19,7 +19,7 @@ func NewRecoverCommand() *cobra.Command {
 		concurrency    int    // 并发数
 		workerPoolSize int    // Worker池大小
 	)
-
+	var configFilePath string
 	cmd := &cobra.Command{
 		Use:   "recover",
 		Short: "修复历史数据",
@@ -46,7 +46,7 @@ func NewRecoverCommand() *cobra.Command {
 			return runHistoryDataRecover(cfg, params)
 		},
 	}
-
+	cmd.PersistentFlags().StringVarP(&configFilePath, "config", "c", "./etc/config/config.yaml", "配置文件路径")
 	// 数据恢复相关参数
 	cmd.Flags().StringVar(&siteID, "siteId", "", "站点ID (空字符串表示所有站点)")
 	cmd.Flags().StringVar(&columnID, "columnId", "", "栏目ID (空字符串表示所有栏目)")
@@ -81,7 +81,7 @@ func runHistoryDataRecover(cfg *recover.Config, params recover.Params) error {
 	// 4. 初始化Manager（单例模式）
 	if err := recover.Init(cfg); err != nil {
 		zap.S().Errorf("Manager初始化失败: %s", err.Error())
-		return fmt.Errorf("Manager初始化失败: %w", err)
+		return fmt.Errorf("manager初始化失败: %w", err)
 	}
 	manager := recover.GetInstance() // 获取单例实例
 

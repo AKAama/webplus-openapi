@@ -2,6 +2,7 @@ package recover
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"webplus-openapi/pkg/models"
@@ -86,9 +87,74 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 		content = "" // 内容获取失败不影响文章恢复
 	}
 
-	// 设置文章内容和其他必要字段
+	// 设置文章内容
 	result.Content = content
-	result.ColumnId = article.ColumnId // 使用传入的ColumnId
+
+	// 计算并填充所有展示栏目（去重）
+	// 1) 唯一来源栏目的栏目
+	columnIdMap := make(map[int]string)
+	columns := make([]models.Column, 0)
+
+	// 解析 articleId 与 folderId 为整型
+	articleIdInt, _ := strconv.Atoi(result.ArticleId)
+	folderIdInt, _ := strconv.Atoi(result.FolderId)
+
+	// 1. 唯一来源 - 根据文件夹ID查找栏目
+	var singleFolderColumn models.Column
+	q1 := r.db.Table("T_COLUMN c").
+		Select("c.id,c.name").
+		Where("c.singleFolderId = ?", folderIdInt)
+	if err := q1.Find(&singleFolderColumn).Error; err != nil {
+		zap.S().Errorw("GetArticleById.singleFolderColumn", "err", err)
+	}
+	if singleFolderColumn.Id > 0 {
+		columnIdMap[singleFolderColumn.Id] = singleFolderColumn.Name
+		columns = append(columns, singleFolderColumn)
+	}
+
+	// 2. 获取将文件夹设置为信息源的栏目 (mappingTypeId = 0)
+	var dataSourceColumns []models.Column
+	if err := r.db.Table("T_COLUMN_DATASOURCE cds").
+		Select("cds.SrcColumnId as id,c.name").
+		Joins("JOIN T_COLUMN c on cds.SrcColumnId = c.id").
+		Where("cds.mappingObjectId = ?", folderIdInt).
+		Where("cds.mappingTypeId = ?", 0).
+		Find(&dataSourceColumns).Error; err != nil {
+		zap.S().Errorw("GetArticleById.dataSourceColumns", "err", err)
+	}
+	for _, ds := range dataSourceColumns {
+		if _, exists := columnIdMap[ds.Id]; exists {
+			continue
+		}
+		columnIdMap[ds.Id] = ds.Name
+		columns = append(columns, ds)
+	}
+
+	// 3. 根据文章获取直接跨站和多栏发布的栏目（T_COLUMNARTICLE）
+	var colArtColumns []models.Column
+	if err := r.db.Table("T_COLUMN c").
+		Select("c.id,c.name").
+		Joins("JOIN T_COLUMNARTICLE ca ON c.id=ca.columnId").
+		Where("ca.articleId = ?", articleIdInt).
+		Find(&colArtColumns).Error; err != nil {
+		zap.S().Errorw("GetArticleById.colArtColumns", "err", err)
+	}
+	for _, ca := range colArtColumns {
+		if _, exists := columnIdMap[ca.Id]; exists {
+			continue
+		}
+		columnIdMap[ca.Id] = ca.Name
+		columns = append(columns, ca)
+	}
+
+	// 4. 递归：获取将上面所有栏目作为信息源的栏目 (mappingTypeId = 1)
+	r.getDataSourceColumn(columnIdMap, &columns)
+
+	// 写回到 result 的数组字段
+	for id, name := range columnIdMap {
+		result.ColumnId = append(result.ColumnId, strconv.Itoa(id))
+		result.ColumnName = append(result.ColumnName, name)
+	}
 
 	// 查询文章附件信息
 	result = *r.queryMediaFileByObjId(&result, "")
@@ -113,7 +179,7 @@ func (r *ArticleRepository) getArticleContent(articleId string) (string, error) 
 }
 
 // RestoreArticleInfos 修复文章访问地址
-func (r *ArticleRepository) RestoreArticleInfos(articleInfo *models.ArticleInfo, article *models.ArticleInfo) (*models.ArticleInfo, error) {
+func (r *ArticleRepository) RestoreArticleInfos(articleInfo *models.ArticleInfo) (*models.ArticleInfo, error) {
 	// 获取站点域名
 	visitDomain, err := r.getVisitDomain(articleInfo.SiteId)
 	if err != nil {
@@ -124,7 +190,6 @@ func (r *ArticleRepository) RestoreArticleInfos(articleInfo *models.ArticleInfo,
 
 	// 处理访问地址
 	if articleInfo.VisitUrl == "" {
-		// 如果没有访问地址，尝试生成
 		visitUrl, err := r.generateVisitUrl(articleInfo, visitDomain)
 		if err != nil {
 			zap.S().Warnf("生成访问地址失败: articleId=%s, err=%v", articleInfo.ArticleId, err)
@@ -137,9 +202,6 @@ func (r *ArticleRepository) RestoreArticleInfos(articleInfo *models.ArticleInfo,
 	if articleInfo.FirstImgPath != "" {
 		articleInfo.FirstImgPath = r.processImagePath(articleInfo.FirstImgPath, articleInfo.FilePath, visitDomain)
 	}
-
-	// 处理附件访问域名（如果需要的话，可以在这里设置相关字段）
-	// articleInfo.AttachVisitDomain = visitDomain
 
 	zap.S().Debugf("成功修复文章访问地址: articleId=%s, visitUrl=%s", articleInfo.ArticleId, articleInfo.VisitUrl)
 	return articleInfo, nil
@@ -162,8 +224,6 @@ func (r *ArticleRepository) getVisitDomain(siteId string) (string, error) {
 
 // generateVisitUrl 生成文章访问地址
 func (r *ArticleRepository) generateVisitUrl(articleInfo *models.ArticleInfo, visitDomain string) (string, error) {
-	// 这里可以根据实际业务逻辑生成访问地址
-	// 暂时返回一个简单的URL格式
 	if visitDomain != "" {
 		return fmt.Sprintf("%s/article/%s", visitDomain, articleInfo.ArticleId), nil
 	}
@@ -233,4 +293,37 @@ func (r *ArticleRepository) queryMediaFileByObjId(articleInfo *models.ArticleInf
 	}
 
 	return articleInfo
+}
+
+// getDataSourceColumn 递归获取展示栏目 (mappingTypeId = 1)
+func (r *ArticleRepository) getDataSourceColumn(columnIdMap map[int]string, columns *[]models.Column) {
+	if len(*columns) == 0 {
+		return
+	}
+	for _, column := range *columns {
+		cs := make([]models.Column, 0)
+		err := r.db.Table("T_COLUMN_DATASOURCE cds").
+			Select("cds.SrcColumnId as id,c.name").
+			Joins("JOIN T_COLUMN c on cds.SrcColumnId = c.id").
+			Where("cds.mappingObjectId = ?", column.Id).
+			Where("cds.mappingTypeId = ?", 1).
+			Find(&cs).Error
+		if err != nil {
+			zap.S().Errorw("GetArticleById.getDataSourceColumn", "err", err)
+			continue
+		}
+		if len(cs) > 0 {
+			newColumns := make([]models.Column, 0)
+			for _, c := range cs {
+				if _, exists := columnIdMap[c.Id]; exists {
+					continue
+				}
+				nc := models.Column{Id: c.Id, Name: c.Name}
+				newColumns = append(newColumns, nc)
+				columnIdMap[c.Id] = c.Name
+				*columns = append(*columns, c)
+			}
+			r.getDataSourceColumn(columnIdMap, &newColumns)
+		}
+	}
 }

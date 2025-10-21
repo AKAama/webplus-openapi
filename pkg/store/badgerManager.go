@@ -7,6 +7,7 @@ import (
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/timshannon/badgerhold/v4"
+	"go.uber.org/zap"
 )
 
 var instance *BadgerStore
@@ -107,9 +108,14 @@ func GetBadgerStore() *BadgerStore {
 
 func CloseBadgerStore() {
 	if instance != nil {
+		zap.S().Info("正在关闭 Badger 存储...")
 		err := instance.store.Close()
 		if err != nil {
-			return
+			zap.S().Errorf("关闭 Badger 存储时发生错误: %v", err)
+		} else {
+			zap.S().Info("Badger 存储已成功关闭")
 		}
+		// 重置实例，避免重复关闭
+		instance = nil
 	}
 }
