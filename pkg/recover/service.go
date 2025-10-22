@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 	"webplus-openapi/pkg/models"
 
 	"github.com/dgraph-io/badger/v4"
@@ -12,6 +13,15 @@ import (
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
+
+// SiteInfo 站点信息结构体
+type SiteInfo struct {
+	ID         string `gorm:"column:id"`
+	Name       string `gorm:"column:name"`
+	DomainName string `gorm:"column:domainName"`
+	DummyName  string `gorm:"column:dummyName"`
+	ParentId   string `gorm:"column:parentId"`
+}
 
 type BadgerStore interface {
 	Store(key string, value interface{}) error
@@ -68,16 +78,73 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 	query.WriteString("JOIN T_SITE s ON sa.siteId = s.id ")
 	query.WriteString("WHERE sa.selfCreate = 1 AND a.deleted = 0 AND a.archived = 0 AND a.id = ?")
 
-	// 执行查询，直接使用ArticleInfo结构体
-	var result models.ArticleInfo
-	err := r.db.Raw(query.String(), article.ArticleId).Scan(&result).Error
+	// 执行查询，使用临时结构体避免切片字段问题
+	type ArticleQueryResult struct {
+		ArticleId      string     `gorm:"column:articleId"`
+		Title          string     `gorm:"column:title"`
+		QuoteTitle     string     `gorm:"column:quoteTitle"`
+		ShortTitle     string     `gorm:"column:shortTitle"`
+		AuxiliaryTitle string     `gorm:"column:auxiliaryTitle"`
+		FolderId       string     `gorm:"column:folderId"`
+		TypeId         string     `gorm:"column:typeId"`
+		CreatorName    string     `gorm:"column:creatorName"`
+		LastModifyTime *time.Time `gorm:"column:lastModifyTime"`
+		CreateTime     string     `gorm:"column:createTime"`
+		Author         string     `gorm:"column:author"`
+		Source         string     `gorm:"column:source"`
+		Keywords       string     `gorm:"column:keywords"`
+		LinkUrl        string     `gorm:"column:linkUrl"`
+		Summary        string     `gorm:"column:summary"`
+		ImageDir       string     `gorm:"column:imageDir"`
+		FilePath       string     `gorm:"column:filePath"`
+		FirstImgPath   string     `gorm:"column:firstImgPath"`
+		CreateOrgName  string     `gorm:"column:createOrgName"`
+		SiteId         string     `gorm:"column:siteId"`
+		UrlPath        string     `gorm:"column:urlPath"`
+		SiteName       string     `gorm:"column:siteName"`
+		SiteArticleId  string     `gorm:"column:siteArticleId"`
+		PublishTime    *time.Time `gorm:"column:publishTime"`
+		PublisherName  string     `gorm:"column:publisherName"`
+		PublishOrgName string     `gorm:"column:publishOrgName"`
+		VisitCount     int        `gorm:"column:visitCount"`
+		Opened         int        `gorm:"column:opened"`
+		Published      int        `gorm:"column:published"`
+		FolderPath     string     `gorm:"column:folderPath"`
+	}
+
+	var queryResult ArticleQueryResult
+	err := r.db.Raw(query.String(), article.ArticleId).Scan(&queryResult).Error
 	if err != nil {
 		return nil, fmt.Errorf("查询文章详情失败: %w", err)
 	}
 
 	// 检查是否找到文章
-	if result.ArticleId == "" {
+	if queryResult.ArticleId == "" {
 		return nil, fmt.Errorf("文章不存在: articleId=%s", article.ArticleId)
+	}
+
+	// 手动构建ArticleInfo结构体
+	result := models.ArticleInfo{
+		ArticleId:      queryResult.ArticleId,
+		Title:          queryResult.Title,
+		ShortTitle:     queryResult.ShortTitle,
+		AuxiliaryTitle: queryResult.AuxiliaryTitle,
+		FolderId:       queryResult.FolderId,
+		CreatorName:    queryResult.CreatorName,
+		LastModifyTime: queryResult.LastModifyTime,
+		CreateTime:     queryResult.CreateTime,
+		Summary:        queryResult.Summary,
+		ImageDir:       queryResult.ImageDir,
+		FilePath:       queryResult.FilePath,
+		FirstImgPath:   queryResult.FirstImgPath,
+		SiteId:         queryResult.SiteId,
+		SiteName:       queryResult.SiteName,
+		PublishTime:    queryResult.PublishTime,
+		PublisherName:  queryResult.PublisherName,
+		PublishOrgName: queryResult.PublishOrgName,
+		// 初始化切片字段
+		ColumnId:   []string{},
+		ColumnName: []string{},
 	}
 
 	// 获取文章内容
@@ -157,7 +224,8 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 	}
 
 	// 查询文章附件信息
-	result = *r.queryMediaFileByObjId(&result, "")
+	baseDomain := r.getBaseDomain(result.SiteId)
+	result = *r.queryMediaFileByObjId(&result, baseDomain)
 
 	zap.S().Debugf("成功查询文章详情: articleId=%s, title=%s", result.ArticleId, result.Title)
 	return &result, nil
@@ -166,9 +234,9 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 // getArticleContent 获取文章内容
 func (r *ArticleRepository) getArticleContent(articleId string) (string, error) {
 	var content string
-	err := r.db.Table("T_ARTICLE").
+	err := r.db.Table("T_ARTICLECONTENT").
 		Select("content").
-		Where("id = ?", articleId).
+		Where("articleId = ?", articleId).
 		Scan(&content).Error
 
 	if err != nil {
@@ -180,56 +248,29 @@ func (r *ArticleRepository) getArticleContent(articleId string) (string, error) 
 
 // RestoreArticleInfos 修复文章访问地址
 func (r *ArticleRepository) RestoreArticleInfos(articleInfo *models.ArticleInfo) (*models.ArticleInfo, error) {
-	// 获取站点域名
-	visitDomain, err := r.getVisitDomain(articleInfo.SiteId)
-	if err != nil {
-		zap.S().Warnf("获取站点域名失败: siteId=%s, err=%v", articleInfo.SiteId, err)
-		// 域名获取失败不影响文章恢复，使用默认值
-		visitDomain = ""
-	}
-
 	// 处理访问地址
 	if articleInfo.VisitUrl == "" {
-		visitUrl, err := r.generateVisitUrl(articleInfo, visitDomain)
-		if err != nil {
-			zap.S().Warnf("生成访问地址失败: articleId=%s, err=%v", articleInfo.ArticleId, err)
-		} else {
+		// 获取第一个栏目ID用于构建访问地址
+		var columnId string
+		if len(articleInfo.ColumnId) > 0 {
+			columnId = articleInfo.ColumnId[0]
+		}
+
+		visitUrl := r.queryVisitUrlFromDB(articleInfo.ArticleId, articleInfo.SiteId, columnId)
+		if visitUrl != "" {
 			articleInfo.VisitUrl = visitUrl
 		}
 	}
 
 	// 处理封面图地址
 	if articleInfo.FirstImgPath != "" {
-		articleInfo.FirstImgPath = r.processImagePath(articleInfo.FirstImgPath, articleInfo.FilePath, visitDomain)
+		// 获取基础域名用于图片路径处理
+		baseDomain := r.getBaseDomain(articleInfo.SiteId)
+		articleInfo.FirstImgPath = r.processImagePath(articleInfo.FirstImgPath, articleInfo.FilePath, baseDomain)
 	}
 
 	zap.S().Debugf("成功修复文章访问地址: articleId=%s, visitUrl=%s", articleInfo.ArticleId, articleInfo.VisitUrl)
 	return articleInfo, nil
-}
-
-// getVisitDomain 获取站点访问域名
-func (r *ArticleRepository) getVisitDomain(siteId string) (string, error) {
-	var domain string
-	err := r.db.Table("T_SITE").
-		Select("domain").
-		Where("id = ?", siteId).
-		Scan(&domain).Error
-
-	if err != nil {
-		return "", fmt.Errorf("查询站点域名失败: %w", err)
-	}
-
-	return domain, nil
-}
-
-// generateVisitUrl 生成文章访问地址
-func (r *ArticleRepository) generateVisitUrl(articleInfo *models.ArticleInfo, visitDomain string) (string, error) {
-	if visitDomain != "" {
-		return fmt.Sprintf("%s/article/%s", visitDomain, articleInfo.ArticleId), nil
-	}
-
-	// 如果没有域名，返回空字符串
-	return "", nil
 }
 
 // processImagePath 处理图片路径
@@ -326,4 +367,142 @@ func (r *ArticleRepository) getDataSourceColumn(columnIdMap map[int]string, colu
 			r.getDataSourceColumn(columnIdMap, &newColumns)
 		}
 	}
+}
+
+// queryVisitUrlFromDB 查询文章访问地址
+func (r *ArticleRepository) queryVisitUrlFromDB(articleId string, siteId string, columnId string) string {
+	// 查询站点信息
+	site, err := r.querySiteInfo(siteId)
+	if err != nil {
+		zap.S().Errorf("查询站点信息失败: %v", err)
+		return ""
+	}
+
+	// 计算基础域名
+	var baseDomain string
+	if site.DomainName != "" {
+		baseDomain = site.DomainName
+	} else if site.ParentId != "" {
+		// 查询父站点域名
+		var parentDomain string
+		var parentSiteId string
+		siteParentSQL := "SELECT SITEID FROM T_PUBLISHSITE WHERE id = ?"
+		err2 := r.db.Raw(siteParentSQL, site.ParentId).Scan(&parentSiteId)
+		parentSQL := "SELECT DOMAINNAME FROM T_SITE WHERE id = ?"
+		if err2.Error == nil {
+			err2 = r.db.Raw(parentSQL, parentSiteId).Scan(&parentDomain)
+		}
+		if err2.Error != nil {
+			zap.S().Errorf("查询父站点域名失败: %v", err2.Error)
+			return ""
+		}
+		baseDomain = parentDomain + "/_s" + siteId
+	}
+
+	// 查询文章urlPath，取决于站群文章页URL模式，0：散射目录模式，1：日期模式
+	//1、若是散射目录，则查T_ARTICLE表的urlPath字段
+	//2、日期模式可能会出现老版本历史遗留问题，所以不看urlPath，直接看T_ARTICLE的createTime
+	urlPath, err := r.queryArticleUrlPath(articleId)
+	if err != nil {
+		zap.S().Errorf("查询文章urlPath失败: %v", err)
+		return ""
+	}
+
+	// 缺失必要数据
+	if baseDomain == "" || urlPath == "" {
+		zap.S().Debugf("缺少必要数据构建访问地址，domainName: %s, urlPath: %s", baseDomain, urlPath)
+		return ""
+	}
+
+	// 构建访问地址
+	visitUrl := r.buildVisitUrl(baseDomain, urlPath, columnId, articleId)
+	return visitUrl
+}
+
+// querySiteInfo 查询站点信息
+func (r *ArticleRepository) querySiteInfo(siteId string) (*SiteInfo, error) {
+	var site SiteInfo
+	siteSQL := `SELECT s.DOMAINNAME as domainName, s.DUMMYNAME as dummyName, ps.PARENTID as parentId  FROM T_SITE s JOIN T_PUBLISHSITE ps ON s.ID = ps.SITEID WHERE s.ID = ?`
+	err := r.db.Raw(siteSQL, siteId).Scan(&site).Error
+	if err != nil {
+		return nil, fmt.Errorf("查询站点信息失败: %w", err)
+	}
+	return &site, nil
+}
+
+// queryArticleUrlPath 查询文章URL路径
+func (r *ArticleRepository) queryArticleUrlPath(articleId string) (string, error) {
+	var createTime string
+	articleSQL := "SELECT createTime FROM T_ARTICLE WHERE id = ?"
+	err := r.db.Raw(articleSQL, articleId).Scan(&createTime).Error
+	if err != nil {
+		return "", err
+	}
+
+	// 解析时间格式并转换为 "2025/0427"
+	if createTime == "" {
+		return "", nil
+	}
+
+	// 尝试解析多种时间格式
+	var t time.Time
+	formats := []string{
+		"2006-01-02T15:04:05Z07:00", // ISO 8601: 2025-04-27T17:56:53+08:00
+		"2006-01-02 15:04:05",       // 常规格式: 2025-04-27 10:45:05
+		"2006-01-02",                // 仅日期: 2025-04-27
+	}
+
+	parsed := false
+	for _, format := range formats {
+		t, err = time.Parse(format, createTime)
+		if err == nil {
+			parsed = true
+			break
+		}
+	}
+
+	if parsed {
+		// 转换为 "2025/0427" 格式
+		return t.Format("2006/0102"), nil
+	}
+
+	// 海大从老版本升上来，urlPath很多不是年月日，这里用返回的createTime实际上可以当做是urlPath，为了后续构建URL部分可以复用
+	return createTime, nil
+}
+
+// buildVisitUrl 构建访问地址的方法
+func (r *ArticleRepository) buildVisitUrl(domainName, urlPath, columnId, articleId string) string {
+	// urlPath 为空无法构建
+	if urlPath == "" {
+		return ""
+	}
+
+	// 将形如 "2025-0322" 的路径格式化为 "2025/0322"
+	formatted := strings.ReplaceAll(urlPath, "-", "/")
+
+	// 规范化 domain：若无协议，默认 http
+	if !strings.HasPrefix(domainName, "http://") && !strings.HasPrefix(domainName, "https://") {
+		domainName = "http://" + domainName
+	}
+	domainName = strings.TrimRight(domainName, "/")
+
+	// 拼接短链：/{formatted}/c{columnId}a{articleId}/page.htm
+	shortLink := fmt.Sprintf("/%s/c%sa%s/page.htm", formatted, columnId, articleId)
+
+	visitUrl := domainName + shortLink
+	return visitUrl
+}
+
+// getBaseDomain 获取基础域名用于图片路径处理
+func (r *ArticleRepository) getBaseDomain(siteId string) string {
+	site, err := r.querySiteInfo(siteId)
+	if err != nil {
+		zap.S().Warnf("获取站点信息失败: %v", err)
+		return ""
+	}
+
+	if site.DomainName != "" {
+		return site.DomainName
+	}
+	return ""
 }

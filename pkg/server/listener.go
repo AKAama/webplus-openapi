@@ -37,8 +37,10 @@ type Articles struct {
 }
 
 const (
-	OperateArtUpdate = "1" //文章新增或修改
-	OperateArtDelete = "2" //文章删除
+	OperateArtUpdate      = "1" //文章新增或修改
+	OperateArtDelete      = "2" //文章删除
+	OPERATE_COLART_DELETE = "7"
+	OPERATE_COLART_CREATE = "8"
 )
 
 var once sync.Once
@@ -171,6 +173,10 @@ func (w *Manager) handleOneMsg(msg jetstream.Msg) error {
 		err = w.handleArticleUpdate(&article)
 	case OperateArtDelete:
 		err = delArticleById(&article)
+	case OPERATE_COLART_DELETE:
+		err = deleteColumnArtsByArtId(&article)
+	case OPERATE_COLART_CREATE:
+		err = updateColumnArtsByArtId(&article)
 	}
 	return err
 }
@@ -186,12 +192,37 @@ func (w *Manager) handleArticleUpdate(article *Article) error {
 	artInfo.VisitUrl = article.VisitUrl
 	//封装附件
 	artInfo = w.queryMediaFileByObjId(artInfo, article)
+	if artInfo == nil {
+		zap.S().Errorf("处理文章附件失败，文章id是=%s", article.ArticleId)
+		return fmt.Errorf("处理文章附件失败")
+	}
 	return handleArticleUpsert(artInfo)
 }
 
 // QueryArticleById 根据文章id来查询mysql文章信息
 func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
 	webplusDB := db.GetDB()
+
+	// 使用临时结构体避免切片字段问题
+	type ArticleQueryResult struct {
+		ArticleId      string     `gorm:"column:articleId"`
+		Title          string     `gorm:"column:title"`
+		ShortTitle     string     `gorm:"column:shortTitle"`
+		AuxiliaryTitle string     `gorm:"column:auxiliaryTitle"`
+		CreatorName    string     `gorm:"column:creatorName"`
+		Summary        string     `gorm:"column:summary"`
+		PublishTime    *time.Time `gorm:"column:publishTime"`
+		PublisherName  string     `gorm:"column:publisherName"`
+		PublishOrgName string     `gorm:"column:publishOrgName"`
+		FirstImgPath   string     `gorm:"column:firstImgPath"`
+		ImageDir       string     `gorm:"column:imageDir"`
+		FilePath       string     `gorm:"column:filePath"`
+		SiteId         string     `gorm:"column:siteId"`
+		SiteName       string     `gorm:"column:siteName"`
+		VisitUrl       string     `gorm:"column:visitUrl"`
+		ColumnId       string     `gorm:"column:columnId"`
+		ColumnName     string     `gorm:"column:columnName"`
+	}
 
 	// 第一步：查询文章基本信息（不包含content）
 	var query strings.Builder
@@ -203,30 +234,47 @@ func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
 
 	params := []any{result.ArticleId}
 
-	var list []*models.ArticleInfo
+	var queryResult ArticleQueryResult
 	sql := fmt.Sprintf("SELECT ts.name as siteName, tsa.siteId AS siteId, ta.id AS articleId, "+
-		"ta.linkUrl AS VisitUrl, "+
+		"ta.linkUrl AS visitUrl, "+
 		"tc.id AS columnId, tc.name AS columnName, ta.title AS title, "+
 		"ta.shortTitle as shortTitle, ta.auxiliaryTitle as auxiliaryTitle, "+
 		"ta.creatorName as creatorName, ta.summary, "+
 		"tsa.publishTime AS publishTime, tsa.publisherName AS publisherName, "+
 		"tsa.publishOrgName AS publishOrgName, ta.firstImgPath, "+
-		"ta.imagedir AS imageDir, ta.filepath AS filePath, "+
-		"tsa.opened AS opened, "+ // 是否公开
-		"ta.deleted AS deleted, ta.archived AS archived, ta.frozen AS frozen, "+
-		"ta.status AS status, tsa.published AS published "+ // 状态相关字段
+		"ta.imagedir AS imageDir, ta.filepath AS filePath "+
 		"%s", query.String())
 
-	err := webplusDB.Raw(sql, params...).Scan(&list)
+	err := webplusDB.Raw(sql, params...).Scan(&queryResult)
 	if err.Error != nil {
 		return nil
 	}
 
-	if len(list) == 0 {
+	if queryResult.ArticleId == "" {
 		return nil
 	}
 
-	articleInfo := list[0]
+	// 手动构建ArticleInfo结构体
+	articleInfo := &models.ArticleInfo{
+		ArticleId:      queryResult.ArticleId,
+		Title:          queryResult.Title,
+		ShortTitle:     queryResult.ShortTitle,
+		AuxiliaryTitle: queryResult.AuxiliaryTitle,
+		CreatorName:    queryResult.CreatorName,
+		Summary:        queryResult.Summary,
+		PublishTime:    queryResult.PublishTime,
+		PublisherName:  queryResult.PublisherName,
+		PublishOrgName: queryResult.PublishOrgName,
+		FirstImgPath:   queryResult.FirstImgPath,
+		ImageDir:       queryResult.ImageDir,
+		FilePath:       queryResult.FilePath,
+		SiteId:         queryResult.SiteId,
+		SiteName:       queryResult.SiteName,
+		VisitUrl:       queryResult.VisitUrl,
+		// 初始化切片字段
+		ColumnId:   []string{queryResult.ColumnId},
+		ColumnName: []string{queryResult.ColumnName},
+	}
 
 	// 第二步：查询文章内容并直接拼接
 	var contentList []struct {
@@ -248,6 +296,10 @@ func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
 }
 
 func (w *Manager) queryMediaFileByObjId(artInfo *models.ArticleInfo, article *Article) *models.ArticleInfo {
+	if artInfo == nil {
+		zap.S().Error("文章信息为空，无法查询附件")
+		return nil
+	}
 	//根据文章id来查询文件路径mediaFile
 	webplusDB := db.GetDB()
 	//构建查询语句
@@ -273,7 +325,10 @@ func (w *Manager) queryMediaFileByObjId(artInfo *models.ArticleInfo, article *Ar
 
 // 处理文章新增还是修改
 func handleArticleUpsert(artInfo *models.ArticleInfo) error {
-	if artInfo.LastModifyTime.IsZero() {
+	if artInfo == nil {
+		return fmt.Errorf("文章信息为空，无法存储")
+	}
+	if artInfo.LastModifyTime != nil && artInfo.LastModifyTime.IsZero() {
 		artInfo.LastModifyTime = nil
 	}
 	bs := store.GetBadgerStore()
@@ -286,6 +341,93 @@ func delArticleById(msg *Article) error {
 	return bs.DeleteMatching(&models.ArticleInfo{}, *query)
 }
 
+// updateColumnArtsByArtId 栏目文章新增 - 在现有文章的columnId中添加新的栏目ID
+func updateColumnArtsByArtId(msg *Article) error {
+	bs := store.GetBadgerStore()
+
+	// 从Badger中获取现有文章信息
+	var existingArticle models.ArticleInfo
+	err := bs.Get(msg.ArticleId, &existingArticle)
+	if err != nil {
+		zap.S().Errorf("获取文章信息失败: articleId=%s, err=%v", msg.ArticleId, err)
+		return fmt.Errorf("获取文章信息失败: %v", err)
+	}
+
+	// 检查publishColumnId是否已经存在
+	columnIdStr := msg.PublishColumnId
+	exists := false
+	for _, existingColumnId := range existingArticle.ColumnId {
+		if existingColumnId == columnIdStr {
+			exists = true
+			break
+		}
+	}
+
+	// 如果不存在，则添加
+	if !exists {
+		existingArticle.ColumnId = append(existingArticle.ColumnId, columnIdStr)
+		zap.S().Debugf("为文章 %s 添加栏目ID: %s", msg.ArticleId, columnIdStr)
+
+		// 更新到Badger
+		err = bs.Upsert(msg.ArticleId, &existingArticle)
+		if err != nil {
+			zap.S().Errorf("更新文章栏目信息失败: articleId=%s, err=%v", msg.ArticleId, err)
+			return fmt.Errorf("更新文章栏目信息失败: %v", err)
+		}
+
+		zap.S().Infof("成功为文章 %s 添加栏目ID: %s", msg.ArticleId, columnIdStr)
+	} else {
+		zap.S().Debugf("文章 %s 的栏目ID %s 已存在，跳过添加", msg.ArticleId, columnIdStr)
+	}
+
+	return nil
+}
+
+// deleteColumnArtsByArtId 栏目文章删除 - 从现有文章的columnId中移除指定的栏目ID
+func deleteColumnArtsByArtId(msg *Article) error {
+	bs := store.GetBadgerStore()
+
+	// 从Badger中获取现有文章信息
+	var existingArticle models.ArticleInfo
+	err := bs.Get(msg.ArticleId, &existingArticle)
+	if err != nil {
+		zap.S().Errorf("获取文章信息失败: articleId=%s, err=%v", msg.ArticleId, err)
+		return fmt.Errorf("获取文章信息失败: %v", err)
+	}
+
+	// 查找并移除指定的栏目ID
+	columnIdStr := msg.PublishColumnId
+	var newColumnIds []string
+	found := false
+
+	for _, existingColumnId := range existingArticle.ColumnId {
+		if existingColumnId != columnIdStr {
+			newColumnIds = append(newColumnIds, existingColumnId)
+		} else {
+			found = true
+		}
+	}
+
+	// 如果找到了要删除的栏目ID，则更新
+	if found {
+		existingArticle.ColumnId = newColumnIds
+		zap.S().Debugf("从文章 %s 中移除栏目ID: %s", msg.ArticleId, columnIdStr)
+
+		// 更新到Badger
+		err = bs.Upsert(msg.ArticleId, &existingArticle)
+		if err != nil {
+			zap.S().Errorf("更新文章栏目信息失败: articleId=%s, err=%v", msg.ArticleId, err)
+			return fmt.Errorf("更新文章栏目信息失败: %v", err)
+		}
+
+		zap.S().Infof("成功从文章 %s 中移除栏目ID: %s", msg.ArticleId, columnIdStr)
+	} else {
+		zap.S().Debugf("文章 %s 中未找到栏目ID %s，跳过删除", msg.ArticleId, columnIdStr)
+	}
+
+	return nil
+}
+
 func getOpearteName(operate string) string {
 	operateName := ""
 	switch operate {
@@ -293,6 +435,10 @@ func getOpearteName(operate string) string {
 		operateName = "文章新增或修改"
 	case OperateArtDelete:
 		operateName = "文章删除"
+	case OPERATE_COLART_DELETE:
+		operateName = "栏目文章删除"
+	case OPERATE_COLART_CREATE:
+		operateName = "栏目文章新增"
 	default:
 		operateName = "未知操作"
 	}

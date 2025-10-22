@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"webplus-openapi/pkg/store"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -20,10 +21,19 @@ func NewServer(cfg *Config) *Server {
 		port: cfg.Port,
 	}
 
-	gin.SetMode(gin.ReleaseMode)
+	gin.SetMode(gin.DebugMode)
 	engine := gin.Default()
 
-	InitRouter(engine, nil)
+	// 创建handler实例
+	handler := &Handler{
+		cfg:            *cfg,
+		articleManager: store.GetBadgerStore(),
+	}
+
+	zap.S().Info("开始注册路由...")
+	InitRouter(engine, handler)
+	zap.S().Info("路由注册完成")
+
 	server.srv = &http.Server{
 		Addr:    fmt.Sprintf(":%d", server.port),
 		Handler: engine,
@@ -32,6 +42,7 @@ func NewServer(cfg *Config) *Server {
 	return server
 }
 func (srv *Server) Run() error {
+	zap.S().Infof("HTTP服务器启动在端口 %d", srv.port)
 	err := srv.srv.ListenAndServe()
 	if err != nil {
 		if errors.Is(err, http.ErrServerClosed) {

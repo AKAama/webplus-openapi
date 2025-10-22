@@ -47,6 +47,15 @@ func (b BadgerStore) DeleteMatching(value interface{}, query badgerhold.Query) e
 	return b.store.DeleteMatching(value, &query)
 }
 
+func (b BadgerStore) Find(value interface{}, query *badgerhold.Query) error {
+	return b.store.Find(value, query)
+}
+
+func (b BadgerStore) Count(value interface{}, query *badgerhold.Query) (int, error) {
+	count, err := b.store.Count(value, query)
+	return int(count), err
+}
+
 // BadgerStoreAdapter 适配器结构体
 type BadgerStoreAdapter struct {
 	store *BadgerStore

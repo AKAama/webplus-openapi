@@ -1,10 +1,8 @@
 package recover
 
 import (
-	"context"
 	"fmt"
 	"runtime"
-	"sync"
 	"webplus-openapi/pkg/models"
 
 	"github.com/pkg/errors"
@@ -83,6 +81,7 @@ func (r *ArticleRepository) GetAllArticleRefs(params Params) ([]ArticleRef, erro
 	query := r.db.Table("T_ARTICLE ta").
 		Select("ta.id, tsa.siteId as site_id").
 		Joins("JOIN T_SITEARTICLE tsa ON ta.id = tsa.publishArticleId").
+		Joins("Join T_PUBLISHSITE tps ON tsa.siteId = tps.siteId").
 		Joins("JOIN T_COLUMN tc ON tc.SyncFolderId = ta.folderId").
 		Where("tsa.published = ? AND tsa.selfCreate = ? AND ta.deleted = ? AND ta.archived = ?", 1, 1, 0, 0)
 
@@ -155,66 +154,52 @@ func (as *ArticleService) ProcessArticlesInBatches(articles []ArticleRef, batchS
 // ProcessArticlesConcurrently 并发处理文章
 func (as *ArticleService) ProcessArticlesConcurrently(articles []ArticleRef, params Params) (*BatchResult, error) {
 	if len(articles) == 0 {
+		zap.S().Warn("没有文章需要处理")
 		return &BatchResult{}, nil
 	}
+
+	zap.S().Infof("开始处理 %d 篇文章，批次大小: %d", len(articles), params.BatchSize)
 
 	// 创建批次
 	batches := as.createBatches(articles, params.BatchSize)
 	totalBatches := len(batches)
 
-	zap.S().Infof("开始并发处理，共 %d 篇文章，分 %d 个批次，并发数: %d",
-		len(articles), totalBatches, params.Concurrency)
+	zap.S().Infof("分 %d 个批次处理", totalBatches)
 
-	// 创建进度跟踪器
-	progressTracker := NewProgressTracker(totalBatches)
+	result := &BatchResult{}
 
-	// 创建上下文和取消函数
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// 顺序处理每个批次
+	for i, batch := range batches {
+		batchNum := i + 1
+		zap.S().Infof("处理批次 [%d/%d]，包含 %d 篇文章", batchNum, totalBatches, len(batch))
 
-	// 创建批次通道
-	batchChan := make(chan *ConcurrentBatch, params.Concurrency*2)
-	resultChan := make(chan *ConcurrentBatch, params.Concurrency*2)
+		// 处理当前批次
+		batchResult, err := as.processBatchWithRetry(batch, 3)
+		if err != nil {
+			zap.S().Errorf("批次 [%d/%d] 处理失败: %v", batchNum, totalBatches, err)
+			// 将整个批次标记为错误
+			result.ErrorCount += len(batch)
+			continue
+		}
 
-	// 启动Worker池
-	var wg sync.WaitGroup
-	for i := 0; i < params.Concurrency; i++ {
-		wg.Add(1)
-		go as.worker(ctx, i+1, batchChan, resultChan, &wg)
+		// 累计统计
+		result.ProcessedCount += batchResult.ProcessedCount
+		result.SkippedCount += batchResult.SkippedCount
+		result.ErrorCount += batchResult.ErrorCount
+
+		// 批次完成日志
+		zap.S().Infof("批次 [%d/%d] 完成 - 处理: %d, 跳过: %d, 错误: %d",
+			batchNum, totalBatches, batchResult.ProcessedCount, batchResult.SkippedCount, batchResult.ErrorCount)
+
+		// 进度报告
+		progress := float64(batchNum) / float64(totalBatches) * 100
+		zap.S().Infof("整体进度: %.1f%% (%d/%d 批次)", progress, batchNum, totalBatches)
 	}
 
-	// 启动结果收集器
-	go as.resultCollector(ctx, resultChan, progressTracker, totalBatches)
+	zap.S().Infof("处理完成 - 总文章: %d, 实际处理: %d, 跳过: %d, 错误: %d",
+		len(articles), result.ProcessedCount, result.SkippedCount, result.ErrorCount)
 
-	// 发送批次到Worker池
-	go func() {
-		defer close(batchChan)
-		for i, batch := range batches {
-			select {
-			case batchChan <- &ConcurrentBatch{
-				ID:       i + 1,
-				Articles: batch,
-			}:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
-
-	// 等待所有Worker完成
-	wg.Wait()
-	close(resultChan)
-
-	// 获取最终结果
-	completed, total, processed, skipped, errors := progressTracker.GetProgress()
-	zap.S().Infof("并发处理完成 - 批次: %d/%d, 处理: %d, 跳过: %d, 错误: %d",
-		completed, total, processed, skipped, errors)
-
-	return &BatchResult{
-		ProcessedCount: processed,
-		SkippedCount:   skipped,
-		ErrorCount:     errors,
-	}, nil
+	return result, nil
 }
 
 // createBatches 创建批次
@@ -230,79 +215,6 @@ func (as *ArticleService) createBatches(articles []ArticleRef, batchSize int) []
 	}
 
 	return batches
-}
-
-// worker Worker协程
-func (as *ArticleService) worker(ctx context.Context, workerID int, batchChan <-chan *ConcurrentBatch, resultChan chan<- *ConcurrentBatch, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	for {
-		select {
-		case batch, ok := <-batchChan:
-			if !ok {
-				zap.S().Debugf("Worker %d 退出", workerID)
-				return
-			}
-
-			zap.S().Debugf("Worker %d 开始处理批次 %d", workerID, batch.ID)
-
-			// 处理批次
-			result, err := as.processBatchWithRetry(batch.Articles, 3)
-			batch.Result = result
-			batch.Error = err
-
-			// 发送结果
-			select {
-			case resultChan <- batch:
-				zap.S().Debugf("Worker %d 完成批次 %d", workerID, batch.ID)
-			case <-ctx.Done():
-				return
-			}
-
-		case <-ctx.Done():
-			zap.S().Debugf("Worker %d 被取消", workerID)
-			return
-		}
-	}
-}
-
-// resultCollector 结果收集器
-func (as *ArticleService) resultCollector(ctx context.Context, resultChan <-chan *ConcurrentBatch, progressTracker *ProgressTracker, totalBatches int) {
-	completedBatches := 0
-
-	for {
-		select {
-		case batch, ok := <-resultChan:
-			if !ok {
-				return
-			}
-
-			completedBatches++
-
-			if batch.Error != nil {
-				zap.S().Errorf("批次 %d 处理失败: %v", batch.ID, batch.Error)
-				// 将整个批次标记为错误
-				progressTracker.UpdateProgress(&BatchResult{
-					ProcessedCount: 0,
-					SkippedCount:   0,
-					ErrorCount:     len(batch.Articles),
-				})
-			} else {
-				zap.S().Infof("批次 %d 完成 - 处理: %d, 跳过: %d, 错误: %d",
-					batch.ID, batch.Result.ProcessedCount, batch.Result.SkippedCount, batch.Result.ErrorCount)
-				progressTracker.UpdateProgress(batch.Result)
-			}
-
-			// 报告进度
-			completed, total, processed, skipped, errors := progressTracker.GetProgress()
-			progress := float64(completed) / float64(total) * 100
-			zap.S().Infof("进度: %.1f%% (%d/%d 批次) - 处理: %d, 跳过: %d, 错误: %d",
-				progress, completed, total, processed, skipped, errors)
-
-		case <-ctx.Done():
-			return
-		}
-	}
 }
 
 // processBatchWithRetry 带重试机制的批次处理
