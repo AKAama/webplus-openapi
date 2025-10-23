@@ -3,7 +3,9 @@ package server
 import (
 	"fmt"
 	"regexp"
+	"sort"
 	"strconv"
+	"strings"
 	"time"
 	"webplus-openapi/pkg/models"
 	"webplus-openapi/pkg/store"
@@ -20,25 +22,14 @@ type Handler struct {
 }
 
 // Pager 分页参数
-type Pager struct {
-	Page     int `json:"page" form:"page" binding:"min=1"`
-	PageSize int `json:"pageSize" form:"pageSize" binding:"min=1,max=100"`
-	Total    int `json:"total"`
-}
 
-// GetArticles 获取文章列表
+// GetArticles 获取文章列表 - 使用游标分页
 func (h *Handler) GetArticles(c *gin.Context) {
-	pager := h.parsePager(c)
 	columnIdStr := c.Query("columnId")
 	siteIdStr := c.Query("siteId")
 
 	// 转换ID类型
-	var columnId, siteId = 0, 0
-	if columnIdStr != "" {
-		if parsed, err := strconv.Atoi(columnIdStr); err == nil {
-			columnId = parsed
-		}
-	}
+	var siteId = 0
 	if siteIdStr != "" {
 		if parsed, err := strconv.Atoi(siteIdStr); err == nil {
 			siteId = parsed
@@ -50,39 +41,66 @@ func (h *Handler) GetArticles(c *gin.Context) {
 	startTimeStr := c.Query("startTime")
 	endTimeStr := c.Query("endTime")
 
+	// 统一的时间解析格式（供 startTime/endTime 以及 cursor 使用）
+	timeFormats := []string{
+		time.RFC3339,
+		"2006-01-02T15:04:05 -07:00",
+		"2006-01-02T15:04:05-07:00",
+		"2006-01-02 15:04:05",
+		time.RFC3339Nano,
+		"2006-01-02",
+	}
+
 	var startTime, endTime *time.Time
 
+	// 可选的时间范围过滤：startTime <= publishTime <= endTime
 	if startTimeStr != "" {
-		if t, err := h.parseTimeString(startTimeStr); err != nil {
-			util.Err(c, fmt.Errorf("invalid startTime format: %v", err))
-			return
-		} else {
-			startTime = &t
+		var parsed time.Time
+		var err error
+		for _, f := range timeFormats {
+			if parsed, err = time.Parse(f, startTimeStr); err == nil {
+				// 如果是纯日期格式，补充起始时间 00:00:00
+				if f == "2006-01-02" {
+					parsed = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, parsed.Location())
+				}
+				break
+			}
 		}
+		if err != nil {
+			util.Err(c, fmt.Errorf("invalid startTime: %s", startTimeStr))
+			return
+		}
+		startTime = &parsed
 	}
-
 	if endTimeStr != "" {
-		if t, err := h.parseTimeString(endTimeStr); err != nil {
-			util.Err(c, fmt.Errorf("invalid endTime format: %v", err))
-			return
-		} else {
-			endTime = &t
+		var parsed time.Time
+		var err error
+		for _, f := range timeFormats {
+			if parsed, err = time.Parse(f, endTimeStr); err == nil {
+				// 如果是纯日期格式，补充结束时间 23:59:59
+				if f == "2006-01-02" {
+					parsed = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 23, 59, 59, 0, parsed.Location())
+				}
+				break
+			}
 		}
+		if err != nil {
+			util.Err(c, fmt.Errorf("invalid endTime: %s", endTimeStr))
+			return
+		}
+		endTime = &parsed
 	}
 
-	// 从Badger数据库获取文章列表
-	var articles []models.ArticleInfo
+	// 游标分页参数处理
+	cursor := c.Query("cursor") // 复合游标: "时间戳,ArticleID"
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
 
-	// 首先测试是否有任何数据
-	var testArticles []models.ArticleInfo
-	testQuery := badgerhold.Where("ArticleId").Ne("")
-	err := h.articleManager.Find(&testArticles, testQuery)
-	if err != nil {
-		util.Err(c, fmt.Errorf("测试查询失败: %v", err))
-		return
+	// 参数验证
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
 	}
-	fmt.Printf("数据库中总文章数: %d\n", len(testArticles))
 
+	// 构建查询条件
 	query := badgerhold.Where("ArticleId").Ne("")
 
 	// 添加站点ID过滤
@@ -90,18 +108,32 @@ func (h *Handler) GetArticles(c *gin.Context) {
 		query = query.And("SiteId").Eq(strconv.Itoa(siteId))
 	}
 
-	// 添加栏目ID过滤
-	if columnId > 0 {
-		// 对于数组字段，使用正则表达式匹配
-		columnIdStr := strconv.Itoa(columnId)
-		pattern := ".*" + regexp.QuoteMeta(columnIdStr) + ".*"
-		regExp, err := regexp.Compile(pattern)
-		if err != nil {
-			util.Err(c, fmt.Errorf("栏目ID正则表达式编译错误: %v", err))
-			return
+	// 添加栏目ID过滤 - 支持多个栏目ID（逗号分隔）
+	if columnIdStr != "" {
+		columnIds := strings.Split(columnIdStr, ",")
+		// 过滤空字符串
+		var validColumnIds []string
+		for _, id := range columnIds {
+			if strings.TrimSpace(id) != "" {
+				validColumnIds = append(validColumnIds, strings.TrimSpace(id))
+			}
 		}
-		query = query.And("ColumnId").RegExp(regExp)
-		fmt.Printf("栏目ID过滤: %s\n", columnIdStr)
+		if len(validColumnIds) > 0 {
+			// 对于数组字段，使用正则表达式匹配多个栏目ID
+			// 构建匹配任意一个栏目ID的正则表达式
+			var patterns []string
+			for _, columnId := range validColumnIds {
+				patterns = append(patterns, ".*"+regexp.QuoteMeta(columnId)+".*")
+			}
+			// 使用 OR 逻辑：匹配任意一个栏目ID
+			pattern := strings.Join(patterns, "|")
+			regExp, err := regexp.Compile(pattern)
+			if err != nil {
+				util.Err(c, fmt.Errorf("栏目ID正则表达式编译错误: %v", err))
+				return
+			}
+			query = query.And("ColumnId").RegExp(regExp)
+		}
 	}
 
 	// 添加关键字过滤 - 使用正则表达式实现模糊搜索
@@ -114,9 +146,6 @@ func (h *Handler) GetArticles(c *gin.Context) {
 			return
 		}
 		query = query.And("Title").RegExp(regExp)
-		// 调试信息
-		fmt.Printf("搜索关键字: %s\n", keyWord)
-		fmt.Printf("正则表达式模式: %s\n", pattern)
 	}
 
 	// 添加时间范围过滤
@@ -127,31 +156,74 @@ func (h *Handler) GetArticles(c *gin.Context) {
 		query = query.And("PublishTime").Le(*endTime)
 	}
 
-	// 执行查询
-	err = h.articleManager.Find(&articles, query)
+	// 解析复合游标
+	var cursorTime time.Time
+	if cursor != "" {
+		parts := strings.Split(cursor, ",")
+		if len(parts) != 2 {
+			util.Err(c, fmt.Errorf("invalid cursor: %s", cursor))
+			return
+		}
+
+		cursorTimeStr, _ := parts[0], parts[1] // 暂时不使用 cursorID，因为 badgerhold 不支持复杂条件
+
+		// 解析时间
+		var err error
+		for _, format := range timeFormats {
+			if cursorTime, err = time.Parse(format, cursorTimeStr); err == nil {
+				break
+			}
+		}
+
+		if err != nil {
+			util.Err(c, err)
+			return
+		}
+
+		// 添加复合条件：时间小于游标时间
+		// 注意：badgerhold 不支持复杂的 OR 条件，这里只使用时间条件
+		query = query.And("PublishTime").Lt(cursorTime)
+	}
+
+	// 执行查询 - 获取比需要多一条的数据来判断是否有下一页
+	var articles []models.ArticleInfo
+	err := h.articleManager.Find(&articles, query)
 	if err != nil {
 		util.Err(c, fmt.Errorf("查询文章列表失败: %v", err))
 		return
 	}
-	fmt.Printf("查询结果数量: %d\n", len(articles))
 
-	// 获取总数
-	total, err := h.articleManager.Count(&models.ArticleInfo{}, query)
-	if err != nil {
-		util.Err(c, fmt.Errorf("获取文章总数失败: %v", err))
-		return
+	// 手动排序：先按时间倒序，再按ID倒序（确保唯一性和一致性）
+	sort.Slice(articles, func(i, j int) bool {
+		if articles[i].PublishTime == nil && articles[j].PublishTime == nil {
+			return articles[i].ArticleId > articles[j].ArticleId
+		}
+		if articles[i].PublishTime == nil {
+			return false
+		}
+		if articles[j].PublishTime == nil {
+			return true
+		}
+		if articles[i].PublishTime.Equal(*articles[j].PublishTime) {
+			return articles[i].ArticleId > articles[j].ArticleId
+		}
+		return articles[i].PublishTime.After(*articles[j].PublishTime)
+	})
+
+	// 判断是否有下一页
+	hasNext := len(articles) > pageSize
+	if hasNext {
+		articles = articles[:pageSize] // 移除多查询的那一条
 	}
 
-	// 分页处理
-	offset := (pager.Page - 1) * pager.PageSize
-	if offset >= len(articles) {
-		articles = []models.ArticleInfo{}
-	} else {
-		end := offset + pager.PageSize
-		if end > len(articles) {
-			end = len(articles)
+	// 计算下一页游标：时间,ArticleID
+	var nextCursor string
+	if hasNext && len(articles) > 0 {
+		lastItem := articles[len(articles)-1]
+		if lastItem.PublishTime != nil {
+			timeStr := lastItem.PublishTime.UTC().Format(time.RFC3339)
+			nextCursor = fmt.Sprintf("%s,%s", timeStr, lastItem.ArticleId)
 		}
-		articles = articles[offset:end]
 	}
 
 	// 转换为响应格式
@@ -165,6 +237,7 @@ func (h *Handler) GetArticles(c *gin.Context) {
 			"columnId":       article.ColumnId,
 			"columnName":     article.ColumnName,
 			"creatorName":    article.CreatorName,
+			"firstImgPath":   article.FirstImgPath,
 			"summary":        article.Summary,
 			"publishTime":    article.PublishTime,
 			"lastModifyTime": article.LastModifyTime,
@@ -174,48 +247,15 @@ func (h *Handler) GetArticles(c *gin.Context) {
 		}
 	}
 
+	// 返回游标分页结果
 	util.Ok(c, gin.H{
-		"count": total,
+		"found": len(articles) > 0,
 		"items": list,
-		"page":  pager.Page,
-		"size":  pager.PageSize,
+		"pagination": gin.H{
+			"pageSize":   pageSize,
+			"hasNext":    hasNext,
+			"nextCursor": nextCursor,
+			"cursor":     cursor,
+		},
 	})
-}
-
-// parsePager 解析分页参数
-func (h *Handler) parsePager(c *gin.Context) *Pager {
-	var pager Pager
-	err := c.ShouldBindQuery(&pager)
-	if err != nil {
-		return &Pager{Page: 1, PageSize: 10}
-	}
-	if pager.Page < 1 {
-		pager.Page = 1
-	}
-	if pager.PageSize < 1 {
-		pager.PageSize = 10
-	}
-	if pager.PageSize > 100 {
-		pager.PageSize = 100
-	}
-	return &pager
-}
-
-// parseTimeString 解析时间字符串
-func (h *Handler) parseTimeString(timeStr string) (time.Time, error) {
-	// 支持多种时间格式
-	formats := []string{
-		"2006-01-02",
-		"2006-01-02 15:04:05",
-		"2006-01-02T15:04:05Z",
-		"2006-01-02T15:04:05.000Z",
-	}
-
-	for _, format := range formats {
-		if t, err := time.Parse(format, timeStr); err == nil {
-			return t, nil
-		}
-	}
-
-	return time.Time{}, fmt.Errorf("unsupported time format: %s", timeStr)
 }

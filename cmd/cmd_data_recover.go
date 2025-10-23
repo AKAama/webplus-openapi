@@ -49,7 +49,6 @@ func NewRecoverCommand() *cobra.Command {
 	cmd.PersistentFlags().StringVarP(&configFilePath, "config", "c", "./etc/config/config.yaml", "配置文件路径")
 	// 数据恢复相关参数
 	cmd.Flags().StringVar(&siteID, "siteId", "", "站点ID (空字符串表示所有站点)")
-	cmd.Flags().StringVar(&columnID, "columnId", "", "栏目ID (空字符串表示所有栏目)")
 	cmd.Flags().IntVar(&batchSize, "batchSize", 500, "批次大小")
 	cmd.Flags().IntVar(&concurrency, "concurrency", 0, "并发数 (0表示使用CPU核心数)")
 	cmd.Flags().IntVar(&workerPoolSize, "workerPoolSize", 0, "Worker池大小 (0表示使用并发数的2倍)")
