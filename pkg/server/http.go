@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"webplus-openapi/pkg/store"
 
 	"github.com/gin-gonic/gin"
@@ -21,7 +22,12 @@ func NewServer(cfg *Config) *Server {
 		port: cfg.Port,
 	}
 
-	gin.SetMode(gin.DebugMode)
+	// 根据环境变量设置Gin模式，默认为Release模式
+	ginMode := os.Getenv("GIN_MODE")
+	if ginMode == "" {
+		ginMode = gin.ReleaseMode
+	}
+	gin.SetMode(ginMode)
 	engine := gin.Default()
 
 	// 创建handler实例

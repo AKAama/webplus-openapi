@@ -5,7 +5,6 @@ nats:
   webplusStreamName: webplus_stream
   consumerName: push_consumer
   subjectName: sudy.webplus.notify.dreamertest-sudy.zyxxlyg.columnAndArticleChange
-
   defaultAccountName: cm
   account:
     cm:

@@ -27,8 +27,9 @@ type Handler struct {
 func (h *Handler) GetArticles(c *gin.Context) {
 	columnIdStr := c.Query("columnId")
 	siteIdStr := c.Query("siteId")
+	articleIdStr := c.Query("articleId")
 
-	// 转换ID类型
+	// 转换 siteId
 	var siteId = 0
 	if siteIdStr != "" {
 		if parsed, err := strconv.Atoi(siteIdStr); err == nil {
@@ -36,12 +37,11 @@ func (h *Handler) GetArticles(c *gin.Context) {
 		}
 	}
 
-	// 检查是否有关键字
 	keyWord := c.Query("keyWord")
 	startTimeStr := c.Query("startTime")
 	endTimeStr := c.Query("endTime")
 
-	// 统一的时间解析格式（供 startTime/endTime 以及 cursor 使用）
+	loc, _ := time.LoadLocation("Asia/Shanghai") //统一为北京时间
 	timeFormats := []string{
 		time.RFC3339,
 		"2006-01-02T15:04:05 -07:00",
@@ -52,16 +52,14 @@ func (h *Handler) GetArticles(c *gin.Context) {
 	}
 
 	var startTime, endTime *time.Time
-
-	// 可选的时间范围过滤：startTime <= publishTime <= endTime
 	if startTimeStr != "" {
 		var parsed time.Time
 		var err error
 		for _, f := range timeFormats {
 			if parsed, err = time.Parse(f, startTimeStr); err == nil {
-				// 如果是纯日期格式，补充起始时间 00:00:00
+				parsed = parsed.In(loc)
 				if f == "2006-01-02" {
-					parsed = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, parsed.Location())
+					parsed = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 0, 0, 0, 0, loc)
 				}
 				break
 			}
@@ -77,9 +75,9 @@ func (h *Handler) GetArticles(c *gin.Context) {
 		var err error
 		for _, f := range timeFormats {
 			if parsed, err = time.Parse(f, endTimeStr); err == nil {
-				// 如果是纯日期格式，补充结束时间 23:59:59
+				parsed = parsed.In(loc)
 				if f == "2006-01-02" {
-					parsed = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 23, 59, 59, 0, parsed.Location())
+					parsed = time.Date(parsed.Year(), parsed.Month(), parsed.Day(), 23, 59, 59, 0, loc)
 				}
 				break
 			}
@@ -91,54 +89,25 @@ func (h *Handler) GetArticles(c *gin.Context) {
 		endTime = &parsed
 	}
 
-	// 游标分页参数处理
-	cursor := c.Query("cursor") // 复合游标: "时间戳,ArticleID"
+	cursor := c.Query("cursor")
 	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
-
-	// 参数验证
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
 
-	// 构建查询条件
 	query := badgerhold.Where("ArticleId").Ne("")
 
-	// 添加站点ID过滤
+	// articleId 精确过滤
+	if articleIdStr != "" {
+		query = query.And("ArticleId").Eq(articleIdStr)
+	}
+
 	if siteId > 0 {
 		query = query.And("SiteId").Eq(strconv.Itoa(siteId))
 	}
 
-	// 添加栏目ID过滤 - 支持多个栏目ID（逗号分隔）
-	if columnIdStr != "" {
-		columnIds := strings.Split(columnIdStr, ",")
-		// 过滤空字符串
-		var validColumnIds []string
-		for _, id := range columnIds {
-			if strings.TrimSpace(id) != "" {
-				validColumnIds = append(validColumnIds, strings.TrimSpace(id))
-			}
-		}
-		if len(validColumnIds) > 0 {
-			// 对于数组字段，使用正则表达式匹配多个栏目ID
-			// 构建匹配任意一个栏目ID的正则表达式
-			var patterns []string
-			for _, columnId := range validColumnIds {
-				patterns = append(patterns, ".*"+regexp.QuoteMeta(columnId)+".*")
-			}
-			// 使用 OR 逻辑：匹配任意一个栏目ID
-			pattern := strings.Join(patterns, "|")
-			regExp, err := regexp.Compile(pattern)
-			if err != nil {
-				util.Err(c, fmt.Errorf("栏目ID正则表达式编译错误: %v", err))
-				return
-			}
-			query = query.And("ColumnId").RegExp(regExp)
-		}
-	}
-
-	// 添加关键字过滤 - 使用正则表达式实现模糊搜索
+	// 关键字模糊匹配
 	if keyWord != "" {
-		// 创建正则表达式，匹配包含关键字的字符串
 		pattern := ".*" + regexp.QuoteMeta(keyWord) + ".*"
 		regExp, err := regexp.Compile(pattern)
 		if err != nil {
@@ -148,7 +117,7 @@ func (h *Handler) GetArticles(c *gin.Context) {
 		query = query.And("Title").RegExp(regExp)
 	}
 
-	// 添加时间范围过滤
+	// 时间范围过滤
 	if startTime != nil {
 		query = query.And("PublishTime").Ge(*startTime)
 	}
@@ -156,100 +125,108 @@ func (h *Handler) GetArticles(c *gin.Context) {
 		query = query.And("PublishTime").Le(*endTime)
 	}
 
-	// 解析复合游标
+	// 游标解析
 	var cursorTime time.Time
 	if cursor != "" {
 		parts := strings.Split(cursor, ",")
-		if len(parts) != 2 {
-			util.Err(c, fmt.Errorf("invalid cursor: %s", cursor))
-			return
-		}
-
-		cursorTimeStr, _ := parts[0], parts[1] // 暂时不使用 cursorID，因为 badgerhold 不支持复杂条件
-
-		// 解析时间
-		var err error
-		for _, format := range timeFormats {
-			if cursorTime, err = time.Parse(format, cursorTimeStr); err == nil {
-				break
+		if len(parts) == 2 {
+			cursorTimeStr := parts[0]
+			for _, f := range timeFormats {
+				if t, err := time.Parse(f, cursorTimeStr); err == nil {
+					cursorTime = t.In(loc)
+					break
+				}
 			}
+			query = query.And("PublishTime").Lt(cursorTime)
 		}
-
-		if err != nil {
-			util.Err(c, err)
-			return
-		}
-
-		// 添加复合条件：时间小于游标时间
-		// 注意：badgerhold 不支持复杂的 OR 条件，这里只使用时间条件
-		query = query.And("PublishTime").Lt(cursorTime)
 	}
 
-	// 执行查询 - 获取比需要多一条的数据来判断是否有下一页
-	var articles []models.ArticleInfo
-	err := h.articleManager.Find(&articles, query)
+	// 查询（不含栏目过滤）
+	var allArticles []models.ArticleInfo
+	err := h.articleManager.Find(&allArticles, query)
 	if err != nil {
 		util.Err(c, fmt.Errorf("查询文章列表失败: %v", err))
 		return
 	}
 
-	// 手动排序：先按时间倒序，再按ID倒序（确保唯一性和一致性）
-	sort.Slice(articles, func(i, j int) bool {
-		if articles[i].PublishTime == nil && articles[j].PublishTime == nil {
-			return articles[i].ArticleId > articles[j].ArticleId
+	// Go 层栏目过滤
+	if columnIdStr != "" {
+		columnIds := strings.Split(columnIdStr, ",")
+		var validColumnIds []string
+		for _, id := range columnIds {
+			if s := strings.TrimSpace(id); s != "" {
+				validColumnIds = append(validColumnIds, s)
+			}
 		}
-		if articles[i].PublishTime == nil {
+		if len(validColumnIds) > 0 {
+			var filtered []models.ArticleInfo
+			for _, art := range allArticles {
+				for _, cid := range art.ColumnId {
+					for _, id := range validColumnIds {
+						if cid == id {
+							filtered = append(filtered, art)
+							goto Next
+						}
+					}
+				}
+			Next:
+			}
+			allArticles = filtered
+		}
+	}
+
+	// 排序（时间倒序）
+	sort.Slice(allArticles, func(i, j int) bool {
+		if allArticles[i].PublishTime == nil && allArticles[j].PublishTime == nil {
+			return allArticles[i].ArticleId > allArticles[j].ArticleId
+		}
+		if allArticles[i].PublishTime == nil {
 			return false
 		}
-		if articles[j].PublishTime == nil {
+		if allArticles[j].PublishTime == nil {
 			return true
 		}
-		if articles[i].PublishTime.Equal(*articles[j].PublishTime) {
-			return articles[i].ArticleId > articles[j].ArticleId
+		if allArticles[i].PublishTime.Equal(*allArticles[j].PublishTime) {
+			return allArticles[i].ArticleId > allArticles[j].ArticleId
 		}
-		return articles[i].PublishTime.After(*articles[j].PublishTime)
+		return allArticles[i].PublishTime.After(*allArticles[j].PublishTime)
 	})
 
-	// 判断是否有下一页
-	hasNext := len(articles) > pageSize
+	hasNext := len(allArticles) > pageSize
 	if hasNext {
-		articles = articles[:pageSize] // 移除多查询的那一条
+		allArticles = allArticles[:pageSize]
 	}
 
-	// 计算下一页游标：时间,ArticleID
 	var nextCursor string
-	if hasNext && len(articles) > 0 {
-		lastItem := articles[len(articles)-1]
-		if lastItem.PublishTime != nil {
-			timeStr := lastItem.PublishTime.UTC().Format(time.RFC3339)
-			nextCursor = fmt.Sprintf("%s,%s", timeStr, lastItem.ArticleId)
+	if hasNext && len(allArticles) > 0 {
+		last := allArticles[len(allArticles)-1]
+		if last.PublishTime != nil {
+			nextCursor = fmt.Sprintf("%s,%s", last.PublishTime.UTC().Format(time.RFC3339), last.ArticleId)
 		}
 	}
 
-	// 转换为响应格式
-	list := make([]gin.H, len(articles))
-	for i, article := range articles {
+	list := make([]gin.H, len(allArticles))
+	for i, a := range allArticles {
 		list[i] = gin.H{
-			"articleId":      article.ArticleId,
-			"title":          article.Title,
-			"siteId":         article.SiteId,
-			"siteName":       article.SiteName,
-			"columnId":       article.ColumnId,
-			"columnName":     article.ColumnName,
-			"creatorName":    article.CreatorName,
-			"firstImgPath":   article.FirstImgPath,
-			"summary":        article.Summary,
-			"publishTime":    article.PublishTime,
-			"lastModifyTime": article.LastModifyTime,
-			"visitUrl":       article.VisitUrl,
-			"content":        article.Content,
-			"attachment":     article.Attachment,
+			"articleId":      a.ArticleId,
+			"title":          a.Title,
+			"siteId":         a.SiteId,
+			"siteName":       a.SiteName,
+			"columnId":       a.ColumnId,
+			"columnName":     a.ColumnName,
+			"creatorName":    a.CreatorName,
+			"firstImgPath":   a.FirstImgPath,
+			"summary":        a.Summary,
+			"publishTime":    a.PublishTime,
+			"lastModifyTime": a.LastModifyTime,
+			"visitUrl":       a.VisitUrl,
+			"content":        a.Content,
+			"attachment":     a.Attachment,
 		}
 	}
 
-	// 返回游标分页结果
 	util.Ok(c, gin.H{
-		"found": len(articles) > 0,
+		"found": len(allArticles) > 0,
 		"items": list,
 		"pagination": gin.H{
 			"pageSize":   pageSize,

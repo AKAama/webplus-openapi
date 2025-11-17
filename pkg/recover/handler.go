@@ -3,6 +3,7 @@ package recover
 import (
 	"fmt"
 	"runtime"
+	"sort"
 	"webplus-openapi/pkg/models"
 
 	"github.com/pkg/errors"
@@ -82,17 +83,11 @@ func (r *ArticleRepository) GetAllArticleRefs(params Params) ([]ArticleRef, erro
 		Select("ta.id, tsa.siteId as site_id").
 		Joins("JOIN T_SITEARTICLE tsa ON ta.id = tsa.publishArticleId").
 		Joins("Join T_PUBLISHSITE tps ON tsa.siteId = tps.siteId").
-		Joins("JOIN T_COLUMN tc ON tc.SyncFolderId = ta.folderId").
 		Where("tsa.published = ? AND tsa.selfCreate = ? AND ta.deleted = ? AND ta.archived = ?", 1, 1, 0, 0)
 
 	// 添加站点过滤条件（空字符串表示所有站点）
 	if params.SiteID != "" {
 		query = query.Where("tsa.siteId = ?", params.SiteID)
-	}
-
-	// 添加栏目过滤条件（空字符串表示所有栏目）
-	if params.ColumnID != "" {
-		query = query.Where("tc.id = ?", params.ColumnID)
 	}
 
 	var articles []ArticleRef
@@ -263,26 +258,29 @@ func (as *ArticleService) processBatch(articles []ArticleRef) (*BatchResult, err
 
 // processArticle 处理单篇文章
 func (as *ArticleService) processArticle(articleRef ArticleRef) ProcessResult {
-	// 检查文章是否已存在
-	var existingArticle models.ArticleInfo
-	err := as.badgerStore.Get(articleRef.ID, &existingArticle)
-	if err == nil {
-		zap.S().Debugf("文章 %s 已存在于BadgerDB中，跳过处理", articleRef.ID)
-		return ProcessResult{Status: "skipped"}
-	}
-	if !errors.Is(err, badgerhold.ErrNotFound) {
-		return ProcessResult{Status: fmt.Sprintf("检查文章存在性失败: %v", err)}
-	}
-
 	// 创建Article对象（仅携带ID；站点与栏目从数据库计算）
 	article := &models.ArticleInfo{
 		ArticleId: articleRef.ID,
 	}
 
-	// 查询文章详情
+	// 查询文章详情（包含完整栏目信息）
 	articleInfo, err := as.repo.GetArticleById(article)
 	if err != nil {
 		return ProcessResult{Status: fmt.Sprintf("查询文章详情失败: %v", err)}
+	}
+
+	// 检查文章是否已存在且栏目一致
+	var existingArticle models.ArticleInfo
+	existErr := as.badgerStore.Get(articleRef.ID, &existingArticle)
+	switch {
+	case existErr == nil:
+		if isSameColumnIDs(existingArticle.ColumnId, articleInfo.ColumnId) {
+			zap.S().Debugf("文章 %s 已存在且栏目列表一致，跳过处理", articleRef.ID)
+			return ProcessResult{Status: "skipped"}
+		}
+		zap.S().Warnf("文章 %s 已存在，但栏目列表不一致，将重新修复", articleRef.ID)
+	case !errors.Is(existErr, badgerhold.ErrNotFound):
+		return ProcessResult{Status: fmt.Sprintf("检查文章存在性失败: %v", existErr)}
 	}
 
 	// 修复文章访问地址
@@ -298,4 +296,24 @@ func (as *ArticleService) processArticle(articleRef ArticleRef) ProcessResult {
 
 	zap.S().Debugf("成功恢复文章 %s 到BadgerDB", articleRef.ID)
 	return ProcessResult{Status: "processed"}
+}
+
+func isSameColumnIDs(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+
+	// copy slices to avoid mutating original order
+	aCopy := append([]string(nil), a...)
+	bCopy := append([]string(nil), b...)
+
+	sort.Strings(aCopy)
+	sort.Strings(bCopy)
+
+	for i := range aCopy {
+		if aCopy[i] != bCopy[i] {
+			return false
+		}
+	}
+	return true
 }

@@ -14,7 +14,6 @@ import (
 func NewRecoverCommand() *cobra.Command {
 	var (
 		siteID         string // 站点ID
-		columnID       string // 栏目ID
 		batchSize      int    // 批次大小
 		concurrency    int    // 并发数
 		workerPoolSize int    // Worker池大小
@@ -37,7 +36,6 @@ func NewRecoverCommand() *cobra.Command {
 			// 恢复文章数据
 			params := recover.Params{
 				SiteID:         siteID,
-				ColumnID:       columnID,
 				BatchSize:      batchSize,
 				Concurrency:    concurrency,
 				WorkerPoolSize: workerPoolSize,
@@ -88,8 +86,8 @@ func runHistoryDataRecover(cfg *recover.Config, params recover.Params) error {
 	recoverService := recover.NewRecoverService(webplusDB, manager, badgerStore)
 
 	// 6. 输出恢复参数信息
-	zap.S().Infof("恢复参数: SiteID=%s, ColumnID=%s, BatchSize=%d, Concurrency=%d, WorkerPoolSize=%d",
-		params.SiteID, params.ColumnID, params.BatchSize, params.Concurrency, params.WorkerPoolSize)
+	zap.S().Infof("恢复参数: SiteID=%s,  BatchSize=%d, Concurrency=%d, WorkerPoolSize=%d",
+		params.SiteID, params.BatchSize, params.Concurrency, params.WorkerPoolSize)
 
 	// 7. 执行历史数据恢复
 	if err := recoverService.RecoverHistoryData(params); err != nil {

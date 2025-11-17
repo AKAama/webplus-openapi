@@ -2,6 +2,7 @@ package recover
 
 import (
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -168,6 +169,7 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 
 	// 1. 唯一来源 - 根据文件夹ID查找栏目
 	var singleFolderColumn models.Column
+	var firstColumn []int
 	q1 := r.db.Table("T_COLUMN c").
 		Select("c.id,c.name").
 		Where("c.singleFolderId = ?", folderIdInt)
@@ -177,10 +179,13 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 	if singleFolderColumn.Id > 0 {
 		columnIdMap[singleFolderColumn.Id] = singleFolderColumn.Name
 		columns = append(columns, singleFolderColumn)
+		firstColumn = append(firstColumn, singleFolderColumn.Id)
 	}
+	zap.S().Debugf("唯一来源 - 根据文件夹ID查找栏目: %v", firstColumn)
 
 	// 2. 获取将文件夹设置为信息源的栏目 (mappingTypeId = 0)
 	var dataSourceColumns []models.Column
+	var secondColumn []int
 	if err := r.db.Table("T_COLUMN_DATASOURCE cds").
 		Select("cds.SrcColumnId as id,c.name").
 		Joins("JOIN T_COLUMN c on cds.SrcColumnId = c.id").
@@ -195,10 +200,13 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 		}
 		columnIdMap[ds.Id] = ds.Name
 		columns = append(columns, ds)
+		secondColumn = append(secondColumn, ds.Id)
 	}
+	zap.S().Debugf("获取将文件夹设置为信息源的栏目: %v", secondColumn)
 
 	// 3. 根据文章获取直接跨站和多栏发布的栏目（T_COLUMNARTICLE）
 	var colArtColumns []models.Column
+	var thirdColumn []int
 	if err := r.db.Table("T_COLUMN c").
 		Select("c.id,c.name").
 		Joins("JOIN T_COLUMNARTICLE ca ON c.id=ca.columnId").
@@ -212,15 +220,24 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 		}
 		columnIdMap[ca.Id] = ca.Name
 		columns = append(columns, ca)
+		thirdColumn = append(thirdColumn, ca.Id)
 	}
+	zap.S().Debugf("根据文章获取直接跨站和多栏发布的栏目: %v", thirdColumn)
 
 	// 4. 递归：获取将上面所有栏目作为信息源的栏目 (mappingTypeId = 1)
 	r.getDataSourceColumn(columnIdMap, &columns)
 
-	// 写回到 result 的数组字段
-	for id, name := range columnIdMap {
-		result.ColumnId = append(result.ColumnId, strconv.Itoa(id))
-		result.ColumnName = append(result.ColumnName, name)
+	// 写回到 result 的数组字段（确保顺序稳定）
+	if len(columnIdMap) > 0 {
+		ids := make([]int, 0, len(columnIdMap))
+		for id := range columnIdMap {
+			ids = append(ids, id)
+		}
+		sort.Ints(ids)
+		for _, id := range ids {
+			result.ColumnId = append(result.ColumnId, strconv.Itoa(id))
+			result.ColumnName = append(result.ColumnName, columnIdMap[id])
+		}
 	}
 
 	// 查询文章附件信息

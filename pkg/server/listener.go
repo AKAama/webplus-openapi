@@ -101,15 +101,29 @@ func (w *Manager) Serve(cfg *Config, ctx context.Context) error {
 			select {
 			//上下文被取消时，退出循环，返回空
 			case <-c.Done():
+				zap.S().Info("NATS listener 接收到关闭信号，正在退出...")
 				return nil
-				//如果上下文没有被取消
 			default:
-				messages, _ := consumer.Fetch(1, jetstream.FetchMaxWait(1*time.Second))
+				// 使用带超时的Fetch，避免无限循环
+				messages, err := consumer.Fetch(1, jetstream.FetchMaxWait(1*time.Second))
+				if err != nil {
+					zap.S().Debugf("NATS Fetch 错误: %v", err)
+					// 如果上下文被取消，直接退出
+					select {
+					case <-c.Done():
+						return nil
+					default:
+						// 继续循环，但添加短暂延迟避免CPU占用过高
+						time.Sleep(100 * time.Millisecond)
+						continue
+					}
+				}
 				for msg := range messages.Messages() {
 					zap.S().Debugf("msg: %s", string(msg.Data()))
 					_ = w.handleOneMsg(msg)
 					err := msg.Ack()
 					if err != nil {
+						zap.S().Errorf("消息确认失败: %v", err)
 						return err
 					}
 				}
