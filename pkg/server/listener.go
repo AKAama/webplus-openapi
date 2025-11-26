@@ -236,6 +236,7 @@ func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
 		VisitUrl       string     `gorm:"column:visitUrl"`
 		ColumnId       string     `gorm:"column:columnId"`
 		ColumnName     string     `gorm:"column:columnName"`
+		models.ArticleFields
 	}
 
 	// 第一步：查询文章基本信息（不包含content）
@@ -249,15 +250,16 @@ func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
 	params := []any{result.ArticleId}
 
 	var queryResult ArticleQueryResult
-	sql := fmt.Sprintf("SELECT ts.name as siteName, tsa.siteId AS siteId, ta.id AS articleId, "+
-		"ta.linkUrl AS visitUrl, "+
-		"tc.id AS columnId, tc.name AS columnName, ta.title AS title, "+
-		"ta.shortTitle as shortTitle, ta.auxiliaryTitle as auxiliaryTitle, "+
-		"ta.creatorName as creatorName, ta.summary, "+
-		"tsa.publishTime AS publishTime, tsa.publisherName AS publisherName, "+
-		"tsa.publishOrgName AS publishOrgName, ta.firstImgPath, "+
-		"ta.imagedir AS imageDir, ta.filepath AS filePath "+
-		"%s", query.String())
+	fieldSelect := buildArticleFieldSelect("ta")
+	baseSelect := "SELECT ts.name as siteName, tsa.siteId AS siteId, ta.id AS articleId, " +
+		"ta.linkUrl AS visitUrl, " +
+		"tc.id AS columnId, tc.name AS columnName, ta.title AS title, " +
+		"ta.shortTitle as shortTitle, ta.auxiliaryTitle as auxiliaryTitle, " +
+		"ta.creatorName as creatorName, ta.summary, " +
+		"tsa.publishTime AS publishTime, tsa.publisherName AS publisherName, " +
+		"tsa.publishOrgName AS publishOrgName, ta.firstImgPath, " +
+		"ta.imagedir AS imageDir, ta.filepath AS filePath"
+	sql := fmt.Sprintf("%s, %s %s", baseSelect, fieldSelect, query.String())
 
 	err := webplusDB.Raw(sql, params...).Scan(&queryResult)
 	if err.Error != nil {
@@ -289,6 +291,7 @@ func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
 		ColumnId:   []string{queryResult.ColumnId},
 		ColumnName: []string{queryResult.ColumnName},
 	}
+	articleInfo.ArticleFields = queryResult.ArticleFields
 
 	// 第二步：查询文章内容并直接拼接
 	var contentList []struct {
@@ -337,6 +340,22 @@ func (w *Manager) queryMediaFileByObjId(artInfo *models.ArticleInfo, article *Ar
 	return artInfo
 }
 
+// queryColumnInfo 根据栏目ID查询栏目名称
+func queryColumnInfo(columnIdStr string) string {
+	if columnIdStr == "" {
+		return ""
+	}
+	webplusDB := db.GetDB()
+	var columnName string
+	sql := "SELECT name FROM T_COLUMN WHERE id = ?"
+	err := webplusDB.Raw(sql, columnIdStr).Scan(&columnName)
+	if err.Error != nil {
+		zap.S().Errorf("查询栏目信息失败: columnId=%s, err=%v", columnIdStr, err.Error)
+		return ""
+	}
+	return columnName
+}
+
 // 处理文章新增还是修改
 func handleArticleUpsert(artInfo *models.ArticleInfo) error {
 	if artInfo == nil {
@@ -369,6 +388,7 @@ func updateColumnArtsByArtId(msg *Article) error {
 
 	// 检查publishColumnId是否已经存在
 	columnIdStr := msg.PublishColumnId
+	columnNameStr := queryColumnInfo(columnIdStr)
 	exists := false
 	for _, existingColumnId := range existingArticle.ColumnId {
 		if existingColumnId == columnIdStr {
@@ -380,6 +400,7 @@ func updateColumnArtsByArtId(msg *Article) error {
 	// 如果不存在，则添加
 	if !exists {
 		existingArticle.ColumnId = append(existingArticle.ColumnId, columnIdStr)
+		existingArticle.ColumnName = append(existingArticle.ColumnName, columnNameStr)
 		zap.S().Debugf("为文章 %s 添加栏目ID: %s", msg.ArticleId, columnIdStr)
 
 		// 更新到Badger
@@ -457,4 +478,15 @@ func getOpearteName(operate string) string {
 		operateName = "未知操作"
 	}
 	return operateName
+}
+
+func buildArticleFieldSelect(alias string) string {
+	var builder strings.Builder
+	for i := 1; i <= 50; i++ {
+		builder.WriteString(fmt.Sprintf("%s.field%d AS field%d", alias, i, i))
+		if i != 50 {
+			builder.WriteString(", ")
+		}
+	}
+	return builder.String()
 }

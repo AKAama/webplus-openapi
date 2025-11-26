@@ -72,8 +72,9 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 	query.WriteString("s.name as siteName,")
 	query.WriteString("sa.id AS siteArticleId,sa.publishTime AS publishTime, sa.publisherName AS publisherName,sa.publishOrgName AS publishOrgName,sa.visitCount AS visitCount, ")
 	query.WriteString("sa.opened AS opened,sa.published AS published,")
-	query.WriteString("f.path AS folderPath ")
-	query.WriteString("FROM T_ARTICLE a ")
+	query.WriteString("f.path AS folderPath, ")
+	query.WriteString(buildArticleFieldSelect("a"))
+	query.WriteString(" FROM T_ARTICLE a ")
 	query.WriteString("JOIN T_FOLDER f on f.id=a.folderId ")
 	query.WriteString("JOIN T_SITEARTICLE sa ON a.id = sa.publishArticleId ")
 	query.WriteString("JOIN T_SITE s ON sa.siteId = s.id ")
@@ -111,6 +112,7 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 		Opened         int        `gorm:"column:opened"`
 		Published      int        `gorm:"column:published"`
 		FolderPath     string     `gorm:"column:folderPath"`
+		models.ArticleFields
 	}
 
 	var queryResult ArticleQueryResult
@@ -147,6 +149,7 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 		ColumnId:   []string{},
 		ColumnName: []string{},
 	}
+	result.ArticleFields = queryResult.ArticleFields
 
 	// 获取文章内容
 	content, err := r.getArticleContent(article.ArticleId)
@@ -384,6 +387,17 @@ func (r *ArticleRepository) getDataSourceColumn(columnIdMap map[int]string, colu
 			r.getDataSourceColumn(columnIdMap, &newColumns)
 		}
 	}
+}
+
+func buildArticleFieldSelect(alias string) string {
+	var builder strings.Builder
+	for i := 1; i <= 50; i++ {
+		builder.WriteString(fmt.Sprintf("%s.field%d AS field%d", alias, i, i))
+		if i != 50 {
+			builder.WriteString(", ")
+		}
+	}
+	return builder.String()
 }
 
 // queryVisitUrlFromDB 查询文章访问地址

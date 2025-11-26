@@ -1,4 +1,9 @@
 # 文章api文档
+## 2.0.2
+### server&recover
+1. 增加扩展字段
+
+
 ## 2.0.1
 ### api_server
 1. 增加一个articleId传参给我们自己验证用

@@ -223,6 +223,7 @@ func (h *Handler) GetArticles(c *gin.Context) {
 			"content":        a.Content,
 			"attachment":     a.Attachment,
 		}
+		injectArticleFields(list[i], a.ArticleFields)
 	}
 
 	util.Ok(c, gin.H{
@@ -235,4 +236,10 @@ func (h *Handler) GetArticles(c *gin.Context) {
 			"cursor":     cursor,
 		},
 	})
+}
+
+func injectArticleFields(target gin.H, fields models.ArticleFields) {
+	for key, value := range fields.ToMap() {
+		target[key] = value
+	}
 }
