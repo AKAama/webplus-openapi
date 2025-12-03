@@ -17,6 +17,8 @@ type Config struct {
 	MaxOpenConns    int    `json:"maxOpenConns,omitempty" yaml:"maxOpenConns,omitempty"`
 	ConnMaxLifetime int    `json:"connMaxLifetime,omitempty" yaml:"connMaxLifetime,omitempty"`
 	Debug           bool   `json:"debug" yaml:"debug"`
+	Schema          string `json:"schema" yaml:"schema"`
+	DBType          string `json:"dbType" yaml:"dbType"`
 }
 
 func (t *Config) Validate() []error {
@@ -44,5 +46,13 @@ func NewDefaultDBConfig() *Config {
 	}
 }
 func (t *Config) DSN() string {
-	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?%s", t.Username, t.Password, t.Host, t.Port, t.Database, "charset=utf8mb4&parseTime=true&loc=Asia%2fShanghai")
+	return fmt.Sprintf(
+		"host=%s user=%s password=%s dbname=%s port=%d sslmode=disable TimeZone=Asia/Shanghai search_path=%s",
+		t.Host,
+		t.Username,
+		t.Password,
+		t.Database,
+		t.Port,
+		t.Schema, // 新增模式字段
+	)
 }

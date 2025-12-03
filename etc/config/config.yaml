@@ -13,9 +13,10 @@ nats:
       seed: "SUAG5FS7H253CMJBZFATMT4E4CLPA22AX37DBUAGF3JPK4EJ7TQ7LBQ4LM"
       nkey: "UBUGBPDHPW44AA4I6YNUDJ4GFRSMNJFNMU64BMBJTQDXLLACII5CSXTP"
 db:
-  host: 127.0.0.1 #170.18.9.182
-  port: 3306
-  username: root
-  password: "12344"
-  database: 3062
+  host: 170.18.9.31 #170.18.9.182
+  port: 54321
+  username: system
+  password: "qwer1234"
+  database: test
+  schema: webplus307
   maxConnections: 600

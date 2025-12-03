@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 	"webplus-openapi/pkg/models"
+	"webplus-openapi/pkg/util"
 
 	"github.com/dgraph-io/badger/v4"
 	"github.com/timshannon/badgerhold/v4"
@@ -82,36 +83,36 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 
 	// 执行查询，使用临时结构体避免切片字段问题
 	type ArticleQueryResult struct {
-		ArticleId      string     `gorm:"column:articleId"`
-		Title          string     `gorm:"column:title"`
-		QuoteTitle     string     `gorm:"column:quoteTitle"`
-		ShortTitle     string     `gorm:"column:shortTitle"`
-		AuxiliaryTitle string     `gorm:"column:auxiliaryTitle"`
-		FolderId       string     `gorm:"column:folderId"`
-		TypeId         string     `gorm:"column:typeId"`
-		CreatorName    string     `gorm:"column:creatorName"`
-		LastModifyTime *time.Time `gorm:"column:lastModifyTime"`
-		CreateTime     string     `gorm:"column:createTime"`
-		Author         string     `gorm:"column:author"`
-		Source         string     `gorm:"column:source"`
-		Keywords       string     `gorm:"column:keywords"`
-		LinkUrl        string     `gorm:"column:linkUrl"`
-		Summary        string     `gorm:"column:summary"`
-		ImageDir       string     `gorm:"column:imageDir"`
-		FilePath       string     `gorm:"column:filePath"`
-		FirstImgPath   string     `gorm:"column:firstImgPath"`
-		CreateOrgName  string     `gorm:"column:createOrgName"`
-		SiteId         string     `gorm:"column:siteId"`
-		UrlPath        string     `gorm:"column:urlPath"`
-		SiteName       string     `gorm:"column:siteName"`
-		SiteArticleId  string     `gorm:"column:siteArticleId"`
-		PublishTime    *time.Time `gorm:"column:publishTime"`
-		PublisherName  string     `gorm:"column:publisherName"`
-		PublishOrgName string     `gorm:"column:publishOrgName"`
-		VisitCount     int        `gorm:"column:visitCount"`
-		Opened         int        `gorm:"column:opened"`
-		Published      int        `gorm:"column:published"`
-		FolderPath     string     `gorm:"column:folderPath"`
+		ArticleId      string `gorm:"column:articleId"`
+		Title          string `gorm:"column:title"`
+		QuoteTitle     string `gorm:"column:quoteTitle"`
+		ShortTitle     string `gorm:"column:shortTitle"`
+		AuxiliaryTitle string `gorm:"column:auxiliaryTitle"`
+		FolderId       string `gorm:"column:folderId"`
+		TypeId         string `gorm:"column:typeId"`
+		CreatorName    string `gorm:"column:creatorName"`
+		LastModifyTime string `gorm:"column:lastModifyTime"`
+		CreateTime     string `gorm:"column:createTime"`
+		Author         string `gorm:"column:author"`
+		Source         string `gorm:"column:source"`
+		Keywords       string `gorm:"column:keywords"`
+		LinkUrl        string `gorm:"column:linkUrl"`
+		Summary        string `gorm:"column:summary"`
+		ImageDir       string `gorm:"column:imageDir"`
+		FilePath       string `gorm:"column:filePath"`
+		FirstImgPath   string `gorm:"column:firstImgPath"`
+		CreateOrgName  string `gorm:"column:createOrgName"`
+		SiteId         string `gorm:"column:siteId"`
+		UrlPath        string `gorm:"column:urlPath"`
+		SiteName       string `gorm:"column:siteName"`
+		SiteArticleId  string `gorm:"column:siteArticleId"`
+		PublishTime    string `gorm:"column:publishTime"`
+		PublisherName  string `gorm:"column:publisherName"`
+		PublishOrgName string `gorm:"column:publishOrgName"`
+		VisitCount     int    `gorm:"column:visitCount"`
+		Opened         int    `gorm:"column:opened"`
+		Published      int    `gorm:"column:published"`
+		FolderPath     string `gorm:"column:folderPath"`
 		models.ArticleFields
 	}
 
@@ -127,6 +128,15 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 	}
 
 	// 手动构建ArticleInfo结构体
+	var lastModifyTime *time.Time
+	if t, ok := util.ParseArticleTime(queryResult.LastModifyTime); ok {
+		lastModifyTime = &t
+	}
+	var publishTime *time.Time
+	if t, ok := util.ParseArticleTime(queryResult.PublishTime); ok {
+		publishTime = &t
+	}
+
 	result := models.ArticleInfo{
 		ArticleId:      queryResult.ArticleId,
 		Title:          queryResult.Title,
@@ -134,7 +144,7 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 		AuxiliaryTitle: queryResult.AuxiliaryTitle,
 		FolderId:       queryResult.FolderId,
 		CreatorName:    queryResult.CreatorName,
-		LastModifyTime: queryResult.LastModifyTime,
+		LastModifyTime: lastModifyTime,
 		CreateTime:     queryResult.CreateTime,
 		Summary:        queryResult.Summary,
 		ImageDir:       queryResult.ImageDir,
@@ -142,7 +152,7 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 		FirstImgPath:   queryResult.FirstImgPath,
 		SiteId:         queryResult.SiteId,
 		SiteName:       queryResult.SiteName,
-		PublishTime:    queryResult.PublishTime,
+		PublishTime:    publishTime,
 		PublisherName:  queryResult.PublisherName,
 		PublishOrgName: queryResult.PublishOrgName,
 		// 初始化切片字段

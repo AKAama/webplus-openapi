@@ -13,6 +13,7 @@ import (
 	"webplus-openapi/pkg/models"
 	"webplus-openapi/pkg/nsc"
 	"webplus-openapi/pkg/store"
+	"webplus-openapi/pkg/util"
 
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/pkg/errors"
@@ -219,23 +220,23 @@ func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
 
 	// 使用临时结构体避免切片字段问题
 	type ArticleQueryResult struct {
-		ArticleId      string     `gorm:"column:articleId"`
-		Title          string     `gorm:"column:title"`
-		ShortTitle     string     `gorm:"column:shortTitle"`
-		AuxiliaryTitle string     `gorm:"column:auxiliaryTitle"`
-		CreatorName    string     `gorm:"column:creatorName"`
-		Summary        string     `gorm:"column:summary"`
-		PublishTime    *time.Time `gorm:"column:publishTime"`
-		PublisherName  string     `gorm:"column:publisherName"`
-		PublishOrgName string     `gorm:"column:publishOrgName"`
-		FirstImgPath   string     `gorm:"column:firstImgPath"`
-		ImageDir       string     `gorm:"column:imageDir"`
-		FilePath       string     `gorm:"column:filePath"`
-		SiteId         string     `gorm:"column:siteId"`
-		SiteName       string     `gorm:"column:siteName"`
-		VisitUrl       string     `gorm:"column:visitUrl"`
-		ColumnId       string     `gorm:"column:columnId"`
-		ColumnName     string     `gorm:"column:columnName"`
+		ArticleId      string `gorm:"column:articleId"`
+		Title          string `gorm:"column:title"`
+		ShortTitle     string `gorm:"column:shortTitle"`
+		AuxiliaryTitle string `gorm:"column:auxiliaryTitle"`
+		CreatorName    string `gorm:"column:creatorName"`
+		Summary        string `gorm:"column:summary"`
+		PublishTime    string `gorm:"column:publishTime"`
+		PublisherName  string `gorm:"column:publisherName"`
+		PublishOrgName string `gorm:"column:publishOrgName"`
+		FirstImgPath   string `gorm:"column:firstImgPath"`
+		ImageDir       string `gorm:"column:imageDir"`
+		FilePath       string `gorm:"column:filePath"`
+		SiteId         string `gorm:"column:siteId"`
+		SiteName       string `gorm:"column:siteName"`
+		VisitUrl       string `gorm:"column:visitUrl"`
+		ColumnId       string `gorm:"column:columnId"`
+		ColumnName     string `gorm:"column:columnName"`
 		models.ArticleFields
 	}
 
@@ -271,6 +272,11 @@ func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
 	}
 
 	// 手动构建ArticleInfo结构体
+	var publishTime *time.Time
+	if t, ok := util.ParseArticleTime(queryResult.PublishTime); ok {
+		publishTime = &t
+	}
+
 	articleInfo := &models.ArticleInfo{
 		ArticleId:      queryResult.ArticleId,
 		Title:          queryResult.Title,
@@ -278,7 +284,7 @@ func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
 		AuxiliaryTitle: queryResult.AuxiliaryTitle,
 		CreatorName:    queryResult.CreatorName,
 		Summary:        queryResult.Summary,
-		PublishTime:    queryResult.PublishTime,
+		PublishTime:    publishTime,
 		PublisherName:  queryResult.PublisherName,
 		PublishOrgName: queryResult.PublishOrgName,
 		FirstImgPath:   queryResult.FirstImgPath,
@@ -360,9 +366,6 @@ func queryColumnInfo(columnIdStr string) string {
 func handleArticleUpsert(artInfo *models.ArticleInfo) error {
 	if artInfo == nil {
 		return fmt.Errorf("文章信息为空，无法存储")
-	}
-	if artInfo.LastModifyTime != nil && artInfo.LastModifyTime.IsZero() {
-		artInfo.LastModifyTime = nil
 	}
 	bs := store.GetBadgerStore()
 	return bs.Upsert(artInfo.ArticleId, artInfo)
