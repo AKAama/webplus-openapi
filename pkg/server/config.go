@@ -13,10 +13,17 @@ import (
 )
 
 type Config struct {
-	ClientName string          `json:"client_name" yaml:"client_name"`
-	Port       int             `json:"port,omitempty" yaml:"port,omitempty"`
-	DB         *db.Config      `json:"db,omitempty" yaml:"db,omitempty"`
-	Nats       *nsc.NatsConfig `json:"nats,omitempty" yaml:"nats,omitempty"`
+	ClientName     string                `json:"client_name" yaml:"clientName"`
+	Port           int                   `json:"port,omitempty" yaml:"port,omitempty" mapstructure:"port"`
+	DB             *db.Config            `json:"db,omitempty" yaml:"db,omitempty" mapstructure:"db"`
+	Nats           *nsc.NatsConfig       `json:"nats,omitempty" yaml:"nats,omitempty" mapstructure:"nats"`
+	ResponseFields *ResponseFieldsConfig `json:"response_fields,omitempty" yaml:"response_fields,omitempty" mapstructure:"response_fields"`
+}
+
+// ResponseFieldsConfig 响应字段配置
+type ResponseFieldsConfig struct {
+	// EnabledFields 启用的字段列表，如果为空则返回所有字段
+	EnabledFields []string `json:"enabled_fields,omitempty" yaml:"enabled_fields,omitempty" mapstructure:"enabled_fields"`
 }
 
 func (g *Config) Validate() []error {

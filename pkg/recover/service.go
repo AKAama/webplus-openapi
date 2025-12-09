@@ -275,8 +275,11 @@ func (r *ArticleRepository) RestoreArticleInfos(articleInfo *models.ArticleInfo)
 		if len(articleInfo.ColumnId) > 0 {
 			columnId = articleInfo.ColumnId[0]
 		}
-
-		visitUrl := r.queryVisitUrlFromDB(articleInfo.ArticleId, articleInfo.SiteId, columnId)
+		siteId, err := r.querySiteByColumnId(columnId)
+		if err != nil {
+			zap.S().Warnf("根据栏目查询站点失败: columnId=%s, err=%v", columnId, err)
+		}
+		visitUrl := r.queryVisitUrlFromDB(articleInfo.ArticleId, siteId, columnId)
 		if visitUrl != "" {
 			articleInfo.VisitUrl = visitUrl
 		}
@@ -459,6 +462,14 @@ func (r *ArticleRepository) querySiteInfo(siteId string) (*SiteInfo, error) {
 		return nil, fmt.Errorf("查询站点信息失败: %w", err)
 	}
 	return &site, nil
+}
+
+func (r *ArticleRepository) querySiteByColumnId(columnId string) (siteId string, err error) {
+	siteSQL := `SELECT siteId  FROM T_COLUMN c WHERE c.ID = ?`
+	if err = r.db.Raw(siteSQL, columnId).Scan(&siteId).Error; err != nil {
+		return "", fmt.Errorf("查询站点信息失败: %w", err)
+	}
+	return siteId, nil
 }
 
 // queryArticleUrlPath 查询文章URL路径

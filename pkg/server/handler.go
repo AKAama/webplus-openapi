@@ -207,23 +207,8 @@ func (h *Handler) GetArticles(c *gin.Context) {
 
 	list := make([]gin.H, len(allArticles))
 	for i, a := range allArticles {
-		list[i] = gin.H{
-			"articleId":      a.ArticleId,
-			"title":          a.Title,
-			"siteId":         a.SiteId,
-			"siteName":       a.SiteName,
-			"columnId":       a.ColumnId,
-			"columnName":     a.ColumnName,
-			"creatorName":    a.CreatorName,
-			"firstImgPath":   a.FirstImgPath,
-			"summary":        a.Summary,
-			"publishTime":    a.PublishTime,
-			"lastModifyTime": a.LastModifyTime,
-			"visitUrl":       a.VisitUrl,
-			"content":        a.Content,
-			"attachment":     a.Attachment,
-		}
-		injectArticleFields(list[i], a.ArticleFields)
+		item := h.buildArticleResponse(a)
+		list[i] = item
 	}
 
 	util.Ok(c, gin.H{
@@ -236,6 +221,53 @@ func (h *Handler) GetArticles(c *gin.Context) {
 			"cursor":     cursor,
 		},
 	})
+}
+
+// buildArticleResponse 根据配置构建文章响应数据
+func (h *Handler) buildArticleResponse(a models.ArticleInfo) gin.H {
+	// 构建完整的响应数据
+	fullData := gin.H{
+		"articleId":      a.ArticleId,
+		"title":          a.Title,
+		"siteId":         a.SiteId,
+		"siteName":       a.SiteName,
+		"columnId":       a.ColumnId,
+		"columnName":     a.ColumnName,
+		"creatorName":    a.CreatorName,
+		"firstImgPath":   a.FirstImgPath,
+		"summary":        a.Summary,
+		"publishTime":    a.PublishTime,
+		"lastModifyTime": a.LastModifyTime,
+		"visitUrl":       a.VisitUrl,
+		"content":        a.Content,
+		"attachment":     a.Attachment,
+	}
+
+	// 注入扩展字段
+	injectArticleFields(fullData, a.ArticleFields)
+
+	// 如果没有配置字段过滤，返回所有字段
+	if h.cfg.ResponseFields == nil || len(h.cfg.ResponseFields.EnabledFields) == 0 {
+		return fullData
+	}
+
+	// 根据配置过滤字段
+	enabledFields := make(map[string]bool)
+	for _, field := range h.cfg.ResponseFields.EnabledFields {
+		enabledFields[strings.ToLower(field)] = true
+	}
+
+	// 构建过滤后的响应数据
+	filteredData := make(gin.H)
+	for key, value := range fullData {
+		// 字段名转换为小写进行匹配
+		keyLower := strings.ToLower(key)
+		if enabledFields[keyLower] {
+			filteredData[key] = value
+		}
+	}
+
+	return filteredData
 }
 
 func injectArticleFields(target gin.H, fields models.ArticleFields) {

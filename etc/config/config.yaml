@@ -19,3 +19,19 @@ db:
   password: "12344"
   database: 3062
   maxConnections: 600
+# 响应字段配置，控制API返回哪些字段
+# 如果enabled_fields为空或不配置，则返回所有字段
+# 字段名不区分大小写，支持以下字段：
+# articleId, title, siteId, siteName, columnId, columnName, creatorName,
+# firstImgPath, summary, publishTime, lastModifyTime, visitUrl, content, attachment,
+# field1-field50 (扩展字段)
+response_fields:
+  enabled_fields:
+    - articleId
+    - title
+    - siteId
+    - siteName
+    - columnId
+    - columnName
+    - publishTime
+    - visitUrl
