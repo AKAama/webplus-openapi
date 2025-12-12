@@ -275,11 +275,20 @@ func (r *ArticleRepository) RestoreArticleInfos(articleInfo *models.ArticleInfo)
 		if len(articleInfo.ColumnId) > 0 {
 			columnId = articleInfo.ColumnId[0]
 		}
-		siteId, err := r.querySiteByColumnId(columnId)
-		if err != nil {
-			zap.S().Warnf("根据栏目查询站点失败: columnId=%s, err=%v", columnId, err)
+		//判断取的这个columnId是否属于创建站点，不属于就换
+		if columnId != "" && articleInfo.SiteId != "" {
+			// 优先选择与创建站点匹配的栏目
+			for _, cid := range articleInfo.ColumnId {
+				if cid == "" {
+					continue
+				}
+				if sid, err := r.querySiteByColumnId(cid); err == nil && sid == articleInfo.SiteId {
+					columnId = cid
+					break
+				}
+			}
 		}
-		visitUrl := r.queryVisitUrlFromDB(articleInfo.ArticleId, siteId, columnId)
+		visitUrl := r.queryVisitUrlFromDB(articleInfo.ArticleId, articleInfo.SiteId, columnId)
 		if visitUrl != "" {
 			articleInfo.VisitUrl = visitUrl
 		}
