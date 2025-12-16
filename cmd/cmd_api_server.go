@@ -52,9 +52,18 @@ func startServer(cfg *server.Config, ctx context.Context) error {
 		zap.S().Fatal(err)
 	}
 
-	//初始化mysql
+	//初始化mysql(站群)
 	if err := db.InitDB(cfg.DB); err != nil {
 		zap.S().Fatalf("无法连接数据库。%s", err.Error())
+	}
+
+	// 初始化 db_storage（只读存储库）
+	if cfg.DBStorage != nil {
+		if err := db.InitTargetDB(cfg.DBStorage); err != nil {
+			zap.S().Fatalf("无法连接 db_storage 数据库。%s", err.Error())
+		}
+	} else {
+		zap.S().Warn("未配置 db_storage，将无法从 article 存储库读取数据")
 	}
 
 	//启动web服务

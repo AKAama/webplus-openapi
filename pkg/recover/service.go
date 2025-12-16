@@ -51,11 +51,11 @@ func Init(cfg *Config) error {
 	return nil
 }
 
-func NewRecoverService(db *gorm.DB, manager *Manager, badgerStore BadgerStore) *Service {
+func NewRecoverService(sourceDB *gorm.DB, manager *Manager, targetDB *gorm.DB) *Service {
 	return &Service{
-		db:          db,
-		manager:     manager,
-		badgerStore: badgerStore,
+		sourceDB: sourceDB,
+		manager:  manager,
+		targetDB: targetDB,
 	}
 }
 

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"webplus-openapi/pkg/db"
 	"webplus-openapi/pkg/recover"
-	"webplus-openapi/pkg/store"
 
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
@@ -55,25 +54,33 @@ func NewRecoverCommand() *cobra.Command {
 }
 
 func runHistoryDataRecover(cfg *recover.Config, params recover.Params) error {
-	// 1. 初始化数据库连接
-	if err := db.InitDB(cfg.DB); err != nil {
-		zap.S().Errorf("数据库初始化失败. [%s]", err.Error())
-		return fmt.Errorf("数据库初始化失败: %w", err)
+	// 1. 初始化源库 (sourceDB，支持 mysql/postgres)
+	if err := db.InitDB(cfg.SourceDB); err != nil {
+		zap.S().Errorf("源库初始化失败: %s", err.Error())
+		return fmt.Errorf("源库初始化失败: %w", err)
 	}
-	zap.S().Info("数据库初始化成功")
+	zap.S().Info("源库初始化成功")
+
+	// 1.2 初始化目标库 (targetDB，强制 MySQL)
+	if err := db.InitTargetDB(cfg.TargetDB); err != nil {
+		zap.S().Errorf("目标库初始化失败: %s", err.Error())
+		return fmt.Errorf("目标库初始化失败: %w", err)
+	}
+	zap.S().Info("目标库初始化成功")
 
 	// 2. 获取数据库连接实例
-	webplusDB := db.GetDB()
-	if webplusDB == nil {
-		errMsg := "数据库连接不可用"
-		zap.S().Error(errMsg)
-		return errors.New(errMsg)
+	sourceDB := db.GetSourceDB()
+	if sourceDB == nil {
+		errMsg1 := "源库连接不可用"
+		zap.S().Error(errMsg1)
+		return errors.New(errMsg1)
 	}
-
-	// 3. 初始化BadgerHold存储
-	bs := store.GetBadgerStore()
-	badgerStore := store.NewBadgerStoreAdapter(bs)
-	zap.S().Info("BadgerHold存储初始化成功")
+	targetDB := db.GetTargetDB()
+	if targetDB == nil {
+		errMsg2 := "目标库连接不可用"
+		zap.S().Error(errMsg2)
+		return errors.New(errMsg2)
+	}
 
 	// 4. 初始化Manager（单例模式）
 	if err := recover.Init(cfg); err != nil {
@@ -82,8 +89,8 @@ func runHistoryDataRecover(cfg *recover.Config, params recover.Params) error {
 	}
 	manager := recover.GetInstance() // 获取单例实例
 
-	// 5. 创建恢复服务
-	recoverService := recover.NewRecoverService(webplusDB, manager, badgerStore)
+	// 5. 创建恢复服务（源库读取，目标库写入）
+	recoverService := recover.NewRecoverService(sourceDB, manager, targetDB)
 
 	// 6. 输出恢复参数信息
 	zap.S().Infof("恢复参数: SiteID=%s,  BatchSize=%d, Concurrency=%d, WorkerPoolSize=%d",

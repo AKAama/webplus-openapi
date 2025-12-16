@@ -16,6 +16,7 @@ type Config struct {
 	ClientName     string                `json:"client_name" yaml:"clientName"`
 	Port           int                   `json:"port,omitempty" yaml:"port,omitempty" mapstructure:"port"`
 	DB             *db.Config            `json:"db,omitempty" yaml:"db,omitempty" mapstructure:"db"`
+	DBStorage      *db.Config            `json:"db_storage,omitempty" yaml:"db_storage,omitempty" mapstructure:"db_storage"`
 	Nats           *nsc.NatsConfig       `json:"nats,omitempty" yaml:"nats,omitempty" mapstructure:"nats"`
 	ResponseFields *ResponseFieldsConfig `json:"response_fields,omitempty" yaml:"response_fields,omitempty" mapstructure:"response_fields"`
 }
@@ -39,9 +40,10 @@ func (g *Config) Validate() []error {
 
 func NewDefaultConfig() *Config {
 	return &Config{
-		Port: 3000,
-		DB:   db.NewDefaultDBConfig(),
-		Nats: nsc.NewDefaultNatsConfig(),
+		Port:      3000,
+		DB:        db.NewDefaultDBConfig(),
+		DBStorage: db.NewDefaultDBConfig(),
+		Nats:      nsc.NewDefaultNatsConfig(),
 	}
 }
 func TryLoadFromDisk(configFilePath string) (*Config, error) {

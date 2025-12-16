@@ -12,12 +12,19 @@ nats:
       password: ""
       seed: "SUAG5FS7H253CMJBZFATMT4E4CLPA22AX37DBUAGF3JPK4EJ7TQ7LBQ4LM"
       nkey: "UBUGBPDHPW44AA4I6YNUDJ4GFRSMNJFNMU64BMBJTQDXLLACII5CSXTP"
-db:
+sourceDB: #站群数据库
+  host: 170.18.9.31 #170.18.9.182
+  port: 54321
+  username: system
+  password: "qwer1234"
+  database: test
+  schema: webplus307 #金仓、postgres需要填写
+targetDB: #此api服务的mysql8数据库
   host: 127.0.0.1 #170.18.9.182
   port: 3306
   username: root
   password: "12344"
-  database: 3062
+  database: webplus_openapi
   maxConnections: 600
 # 响应字段配置，控制API返回哪些字段
 # 如果enabled_fields为空或不配置，则返回所有字段

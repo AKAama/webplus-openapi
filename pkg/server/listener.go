@@ -215,7 +215,7 @@ func (w *Manager) handleArticleUpdate(article *Article) error {
 
 // QueryArticleById 根据文章id来查询mysql文章信息
 func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
-	webplusDB := db.GetDB()
+	webplusDB := db.GetSourceDB()
 
 	// 使用临时结构体避免切片字段问题
 	type ArticleQueryResult struct {
@@ -318,7 +318,7 @@ func (w *Manager) queryMediaFileByObjId(artInfo *models.ArticleInfo, article *Ar
 		return nil
 	}
 	//根据文章id来查询文件路径mediaFile
-	webplusDB := db.GetDB()
+	webplusDB := db.GetSourceDB()
 	//构建查询语句
 	var query strings.Builder
 	query.WriteString("FROM `T_MEDIAFILE_USED`  tmu   JOIN `T_MEDIAFILE`  tm  ON  tmu.`mediaFileId` = tm.`id`  WHERE tmu.`objId` = ?")
@@ -345,7 +345,7 @@ func queryColumnInfo(columnIdStr string) string {
 	if columnIdStr == "" {
 		return ""
 	}
-	webplusDB := db.GetDB()
+	webplusDB := db.GetSourceDB()
 	var columnName string
 	sql := "SELECT name FROM T_COLUMN WHERE id = ?"
 	err := webplusDB.Raw(sql, columnIdStr).Scan(&columnName)

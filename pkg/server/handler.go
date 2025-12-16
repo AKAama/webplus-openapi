@@ -2,23 +2,22 @@ package server
 
 import (
 	"fmt"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+	"webplus-openapi/pkg/db"
 	"webplus-openapi/pkg/models"
-	"webplus-openapi/pkg/store"
 	"webplus-openapi/pkg/util"
 
 	"github.com/gin-gonic/gin"
-	"github.com/timshannon/badgerhold/v4"
+	"gorm.io/gorm"
 )
 
 // Handler v1版本API处理器
 type Handler struct {
-	cfg            Config
-	articleManager *store.BadgerStore
+	cfg Config
+	db  *gorm.DB // 来自 targetDB 的只读 MySQL
 }
 
 // Pager 分页参数
@@ -95,84 +94,187 @@ func (h *Handler) GetArticles(c *gin.Context) {
 		pageSize = 20
 	}
 
-	query := badgerhold.Where("ArticleId").Ne("")
+	// 使用 db_storage 中的 article / article_column 表进行查询
+	db := db.GetTargetDB()
+	if db == nil {
+		util.Err(c, fmt.Errorf("db_storage 未初始化"))
+		return
+	}
+
+	// 1. 如果有栏目过滤，先根据 article_column 查出符合条件的 articleId 列表
+	var articleIDsByColumn []int64
+	if columnIdStr != "" {
+		columnIds := strings.Split(columnIdStr, ",")
+		var validColumnIds []int64
+		for _, id := range columnIds {
+			if s := strings.TrimSpace(id); s != "" {
+				if v, err := strconv.ParseInt(s, 10, 64); err == nil {
+					validColumnIds = append(validColumnIds, v)
+				}
+			}
+		}
+		if len(validColumnIds) == 0 {
+			// 没有合法的栏目ID，直接返回空
+			util.Ok(c, gin.H{
+				"found":      false,
+				"items":      []gin.H{},
+				"pagination": gin.H{"pageSize": pageSize, "hasNext": false, "nextCursor": "", "cursor": cursor},
+			})
+			return
+		}
+
+		// 从 article_column 中查出匹配的文章ID
+		if err := db.Table("article_column").
+			Select("DISTINCT article_id").
+			Where("column_id IN ?", validColumnIds).
+			Scan(&articleIDsByColumn).Error; err != nil {
+			util.Err(c, fmt.Errorf("根据栏目过滤文章失败: %v", err))
+			return
+		}
+		if len(articleIDsByColumn) == 0 {
+			util.Ok(c, gin.H{
+				"found":      false,
+				"items":      []gin.H{},
+				"pagination": gin.H{"pageSize": pageSize, "hasNext": false, "nextCursor": "", "cursor": cursor},
+			})
+			return
+		}
+	}
+
+	// 2. 构建 article 查询
+	type ArticleRow struct {
+		ArticleId      int64      `gorm:"column:article_id"`
+		SiteId         int64      `gorm:"column:site_id"`
+		SiteName       string     `gorm:"column:site_name"`
+		Title          string     `gorm:"column:title"`
+		Summary        string     `gorm:"column:summary"`
+		CreatorName    string     `gorm:"column:creator_name"`
+		PublishTime    *time.Time `gorm:"column:publish_time"`
+		LastModifyTime *time.Time `gorm:"column:last_modify_time"`
+		VisitUrl       string     `gorm:"column:visit_url"`
+		FirstImgPath   string     `gorm:"column:first_img_path"`
+		Content        string     `gorm:"column:content"`
+	}
+
+	query := db.Table("article")
+
+	// 按栏目过滤
+	if len(articleIDsByColumn) > 0 {
+		query = query.Where("article_id IN ?", articleIDsByColumn)
+	}
+
+	// siteId 过滤
+	if siteId > 0 {
+		query = query.Where("site_id = ?", siteId)
+	}
 
 	// articleId 精确过滤
 	if articleIdStr != "" {
-		query = query.And("ArticleId").Eq(articleIdStr)
-	}
-
-	if siteId > 0 {
-		query = query.And("SiteId").Eq(strconv.Itoa(siteId))
-	}
-
-	// 关键字模糊匹配
-	if keyWord != "" {
-		pattern := ".*" + regexp.QuoteMeta(keyWord) + ".*"
-		regExp, err := regexp.Compile(pattern)
-		if err != nil {
-			util.Err(c, fmt.Errorf("正则表达式编译错误: %v", err))
+		if aid, err := strconv.ParseInt(articleIdStr, 10, 64); err == nil {
+			query = query.Where("article_id = ?", aid)
+		} else {
+			util.Err(c, fmt.Errorf("articleId 必须为数字: %s", articleIdStr))
 			return
 		}
-		query = query.And("Title").RegExp(regExp)
+	}
+
+	// 关键字模糊匹配（标题）
+	if keyWord != "" {
+		like := "%" + keyWord + "%"
+		query = query.Where("title LIKE ?", like)
 	}
 
 	// 时间范围过滤
 	if startTime != nil {
-		query = query.And("PublishTime").Ge(*startTime)
+		query = query.Where("publish_time >= ?", *startTime)
 	}
 	if endTime != nil {
-		query = query.And("PublishTime").Le(*endTime)
+		query = query.Where("publish_time <= ?", *endTime)
 	}
 
-	// 游标解析
-	var cursorTime time.Time
+	// 游标解析（基于 publish_time）
 	if cursor != "" {
 		parts := strings.Split(cursor, ",")
-		if len(parts) == 2 {
+		if len(parts) >= 1 {
 			cursorTimeStr := parts[0]
 			for _, f := range timeFormats {
 				if t, err := time.Parse(f, cursorTimeStr); err == nil {
-					cursorTime = t.In(loc)
+					t = t.In(loc)
+					query = query.Where("publish_time < ?", t)
 					break
 				}
 			}
-			query = query.And("PublishTime").Lt(cursorTime)
 		}
 	}
 
-	// 查询（不含栏目过滤）
-	var allArticles []models.ArticleInfo
-	err := h.articleManager.Find(&allArticles, query)
-	if err != nil {
+	// 排序 + 分页，多取一条判断 hasNext
+	query = query.Order("publish_time DESC, article_id DESC").Limit(pageSize + 1)
+
+	var rows []ArticleRow
+	if err := query.Scan(&rows).Error; err != nil {
 		util.Err(c, fmt.Errorf("查询文章列表失败: %v", err))
 		return
 	}
 
-	// Go 层栏目过滤
-	if columnIdStr != "" {
-		columnIds := strings.Split(columnIdStr, ",")
-		var validColumnIds []string
-		for _, id := range columnIds {
-			if s := strings.TrimSpace(id); s != "" {
-				validColumnIds = append(validColumnIds, s)
+	hasNext := len(rows) > pageSize
+	if hasNext {
+		rows = rows[:pageSize]
+	}
+
+	// 3. 批量查询栏目数据并组装 ColumnId/ColumnName
+	var articleIDs []int64
+	for _, r := range rows {
+		articleIDs = append(articleIDs, r.ArticleId)
+	}
+
+	type ColumnRow struct {
+		ArticleId  int64  `gorm:"column:article_id"`
+		ColumnId   int64  `gorm:"column:column_id"`
+		ColumnName string `gorm:"column:column_name"`
+	}
+	columnMap := make(map[int64][]ColumnRow)
+	if len(articleIDs) > 0 {
+		var colRows []ColumnRow
+		if err := db.Table("article_column").
+			Select("article_id, column_id, column_name").
+			Where("article_id IN ?", articleIDs).
+			Scan(&colRows).Error; err != nil {
+			util.Err(c, fmt.Errorf("查询文章栏目失败: %v", err))
+			return
+		}
+		for _, cr := range colRows {
+			columnMap[cr.ArticleId] = append(columnMap[cr.ArticleId], cr)
+		}
+	}
+
+	// 4. 组装为 ArticleInfo
+	allArticles := make([]models.ArticleInfo, 0, len(rows))
+	for _, r := range rows {
+		a := models.ArticleInfo{
+			ArticleId:      strconv.FormatInt(r.ArticleId, 10),
+			SiteId:         strconv.FormatInt(r.SiteId, 10),
+			SiteName:       r.SiteName,
+			Title:          r.Title,
+			Summary:        r.Summary,
+			CreatorName:    r.CreatorName,
+			PublishTime:    r.PublishTime,
+			LastModifyTime: r.LastModifyTime,
+			VisitUrl:       r.VisitUrl,
+			FirstImgPath:   r.FirstImgPath,
+			Content:        r.Content,
+			ColumnId:       []string{},
+			ColumnName:     []string{},
+		}
+
+		if cols, ok := columnMap[r.ArticleId]; ok {
+			// 保持按 columnId 升序
+			sort.Slice(cols, func(i, j int) bool { return cols[i].ColumnId < cols[j].ColumnId })
+			for _, cRow := range cols {
+				a.ColumnId = append(a.ColumnId, strconv.FormatInt(cRow.ColumnId, 10))
+				a.ColumnName = append(a.ColumnName, cRow.ColumnName)
 			}
 		}
-		if len(validColumnIds) > 0 {
-			var filtered []models.ArticleInfo
-			for _, art := range allArticles {
-				for _, cid := range art.ColumnId {
-					for _, id := range validColumnIds {
-						if cid == id {
-							filtered = append(filtered, art)
-							goto Next
-						}
-					}
-				}
-			Next:
-			}
-			allArticles = filtered
-		}
+		allArticles = append(allArticles, a)
 	}
 
 	// 排序（时间倒序）
@@ -191,11 +293,6 @@ func (h *Handler) GetArticles(c *gin.Context) {
 		}
 		return allArticles[i].PublishTime.After(*allArticles[j].PublishTime)
 	})
-
-	hasNext := len(allArticles) > pageSize
-	if hasNext {
-		allArticles = allArticles[:pageSize]
-	}
 
 	var nextCursor string
 	if hasNext && len(allArticles) > 0 {

@@ -3,10 +3,11 @@ package recover
 import (
 	"fmt"
 	"runtime"
+	"strconv"
+	"webplus-openapi/pkg/db"
 	"webplus-openapi/pkg/models"
 
 	"github.com/pkg/errors"
-	"github.com/timshannon/badgerhold/v4"
 	"go.uber.org/zap"
 )
 
@@ -20,8 +21,8 @@ func (s *Service) RecoverHistoryData(params Params) error {
 	zap.S().Info("开始数据恢复任务")
 
 	// 创建文章服务
-	articleRepo := NewArticleRepository(s.db)
-	articleService := NewArticleService(articleRepo, s.badgerStore)
+	articleRepo := NewArticleRepository(s.sourceDB)
+	articleService := NewArticleService(articleRepo, s.targetDB)
 
 	// 获取所有需要恢复的文章ID
 	articleRefs, err := articleRepo.GetAllArticleRefs(params)
@@ -257,15 +258,23 @@ func (as *ArticleService) processBatch(articles []ArticleRef) (*BatchResult, err
 
 // processArticle 处理单篇文章
 func (as *ArticleService) processArticle(articleRef ArticleRef) ProcessResult {
-	// 检查文章是否已存在
-	var existingArticle models.ArticleInfo
-	err := as.badgerStore.Get(articleRef.ID, &existingArticle)
-	if err == nil {
-		zap.S().Debugf("文章 %s 已存在于BadgerDB中，跳过处理", articleRef.ID)
-		return ProcessResult{Status: "skipped"}
+	targetDB := db.GetTargetDB()
+	if targetDB == nil {
+		return ProcessResult{Status: "TargetDB未初始化"}
 	}
-	if !errors.Is(err, badgerhold.ErrNotFound) {
+
+	articleIDInt, err := strconv.ParseInt(articleRef.ID, 10, 64)
+	if err != nil {
+		return ProcessResult{Status: fmt.Sprintf("articleId 转换失败: %v", err)}
+	}
+
+	var count int64
+	if err := targetDB.Table("article").Where("article_id = ?", articleIDInt).Count(&count).Error; err != nil {
 		return ProcessResult{Status: fmt.Sprintf("检查文章存在性失败: %v", err)}
+	}
+	if count > 0 {
+		zap.S().Debugf("文章 %s 已存在于 targetDB.article 中，跳过处理", articleRef.ID)
+		return ProcessResult{Status: "skipped"}
 	}
 
 	// 创建Article对象（仅携带ID；站点与栏目从数据库计算）
@@ -285,11 +294,68 @@ func (as *ArticleService) processArticle(articleRef ArticleRef) ProcessResult {
 		return ProcessResult{Status: fmt.Sprintf("修复文章访问地址失败: %v", err)}
 	}
 
-	// 存储文章
-	if err := as.badgerStore.Store(articleInfo.ArticleId, articleInfo); err != nil {
-		return ProcessResult{Status: fmt.Sprintf("存储文章到BadgerDB失败: %v", err)}
+	tx := targetDB.Begin()
+	if tx.Error != nil {
+		return ProcessResult{Status: fmt.Sprintf("开启事务失败: %v", tx.Error)}
 	}
 
-	zap.S().Debugf("成功恢复文章 %s 到BadgerDB", articleRef.ID)
+	// 先清理旧数据（幂等）
+	if err := tx.Exec("DELETE FROM article_column WHERE article_id = ?", articleIDInt).Error; err != nil {
+		tx.Rollback()
+		return ProcessResult{Status: fmt.Sprintf("清理 article_column 失败: %v", err)}
+	}
+	if err := tx.Exec("DELETE FROM article WHERE article_id = ?", articleIDInt).Error; err != nil {
+		tx.Rollback()
+		return ProcessResult{Status: fmt.Sprintf("清理 article 失败: %v", err)}
+	}
+
+	// 插入 article
+	siteIDInt, _ := strconv.ParseInt(articleInfo.SiteId, 10, 64)
+	articleRow := map[string]interface{}{
+		"article_id":       articleIDInt,
+		"site_id":          siteIDInt,
+		"site_name":        articleInfo.SiteName,
+		"title":            articleInfo.Title,
+		"summary":          articleInfo.Summary,
+		"creator_name":     articleInfo.CreatorName,
+		"publish_time":     articleInfo.PublishTime,
+		"last_modify_time": articleInfo.LastModifyTime,
+		"visit_url":        articleInfo.VisitUrl,
+		"first_img_path":   articleInfo.FirstImgPath,
+		"content":          articleInfo.Content,
+	}
+	if err := tx.Table("article").Create(&articleRow).Error; err != nil {
+		tx.Rollback()
+		return ProcessResult{Status: fmt.Sprintf("写入 article 失败: %v", err)}
+	}
+
+	// 插入 article_column
+	for i := range articleInfo.ColumnId {
+		colIDStr := articleInfo.ColumnId[i]
+		colName := ""
+		if i < len(articleInfo.ColumnName) {
+			colName = articleInfo.ColumnName[i]
+		}
+		colIDInt, err := strconv.ParseInt(colIDStr, 10, 64)
+		if err != nil {
+			zap.S().Warnf("解析栏目ID失败: articleId=%s, columnId=%s, err=%v", articleRef.ID, colIDStr, err)
+			continue
+		}
+		colRow := map[string]interface{}{
+			"article_id":  articleIDInt,
+			"column_id":   colIDInt,
+			"column_name": colName,
+		}
+		if err := tx.Table("article_column").Create(&colRow).Error; err != nil {
+			tx.Rollback()
+			return ProcessResult{Status: fmt.Sprintf("写入 article_column 失败: %v", err)}
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return ProcessResult{Status: fmt.Sprintf("提交事务失败: %v", err)}
+	}
+
+	zap.S().Debugf("成功恢复文章 %s 到 targetDB.article/article_column", articleRef.ID)
 	return ProcessResult{Status: "processed"}
 }

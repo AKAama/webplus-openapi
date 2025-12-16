@@ -53,9 +53,9 @@ type ProgressTracker struct {
 
 // Service 数据恢复服务
 type Service struct {
-	db          *gorm.DB
-	manager     *Manager
-	badgerStore BadgerStore
+	sourceDB *gorm.DB
+	targetDB *gorm.DB
+	manager  *Manager
 }
 
 // Manager Webplus管理器
@@ -70,8 +70,8 @@ type ArticleRepository struct {
 
 // ArticleService 文章业务逻辑层
 type ArticleService struct {
-	repo        *ArticleRepository
-	badgerStore BadgerStore
+	repo     *ArticleRepository
+	targetDB *gorm.DB
 }
 
 // NewArticleRepository 创建文章数据访问层
@@ -80,10 +80,10 @@ func NewArticleRepository(db *gorm.DB) *ArticleRepository {
 }
 
 // NewArticleService 创建文章业务逻辑层
-func NewArticleService(repo *ArticleRepository, badgerStore BadgerStore) *ArticleService {
+func NewArticleService(repo *ArticleRepository, targetDB *gorm.DB) *ArticleService {
 	return &ArticleService{
-		repo:        repo,
-		badgerStore: badgerStore,
+		repo:     repo,
+		targetDB: targetDB,
 	}
 }
 

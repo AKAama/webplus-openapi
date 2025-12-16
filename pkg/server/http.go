@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"webplus-openapi/pkg/store"
+	"webplus-openapi/pkg/db"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
@@ -30,10 +30,10 @@ func NewServer(cfg *Config) *Server {
 	gin.SetMode(ginMode)
 	engine := gin.Default()
 
-	// 创建handler实例
+	// 创建handler实例（使用 db_storage 中的 MySQL 存储）
 	handler := &Handler{
-		cfg:            *cfg,
-		articleManager: store.GetBadgerStore(),
+		cfg: *cfg,
+		db:  db.GetTargetDB(),
 	}
 
 	zap.S().Info("开始注册路由...")

@@ -12,8 +12,9 @@ import (
 )
 
 type Config struct {
-	DB   *db.Config      `json:"db,omitempty" yaml:"db,omitempty"`
-	Nats *nsc.NatsConfig `json:"nats,omitempty" yaml:"nats,omitempty"`
+	SourceDB *db.Config      `json:"source_db,omitempty" yaml:"sourceDB,omitempty"`
+	TargetDB *db.Config      `json:"target_db,omitempty" yaml:"targetDB,omitempty"`
+	Nats     *nsc.NatsConfig `json:"nats,omitempty" yaml:"nats,omitempty"`
 }
 
 func TryLoadFromDisk(configFilePath string) (*Config, error) {
@@ -43,7 +44,8 @@ func TryLoadFromDisk(configFilePath string) (*Config, error) {
 
 func NewDefaultConfig() *Config {
 	return &Config{
-		Nats: nsc.NewDefaultNatsConfig(),
-		DB:   db.NewDefaultDBConfig(),
+		Nats:     nsc.NewDefaultNatsConfig(),
+		SourceDB: db.NewDefaultDBConfig(),
+		TargetDB: db.NewDefaultDBConfig(),
 	}
 }
