@@ -1,6 +1,8 @@
 package util
 
 import (
+	"strings"
+	"time"
 	"unsafe"
 
 	"github.com/pkg/errors"
@@ -21,4 +23,26 @@ func IsValidPort[T int | int32 | uint | uint32 | uint64 | int64 | string](port T
 
 func StringToBytes(s string) []byte {
 	return unsafe.Slice(unsafe.StringData(s), len(s))
+}
+
+func ParseArticleTime(val string) (time.Time, bool) {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return time.Time{}, false
+	}
+	formats := []string{
+		time.RFC3339,
+		"2006-01-02 15:04:05",
+		"2006-01-02",
+		"2006/01/02 15:04:05",
+		"2006/01/02",
+		"2006-01-02T15:04:05-07:00",
+		"2006-01-02T15:04:05 -07:00",
+	}
+	for _, f := range formats {
+		if t, err := time.Parse(f, val); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
 }

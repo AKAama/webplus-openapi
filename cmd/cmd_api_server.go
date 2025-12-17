@@ -7,7 +7,6 @@ import (
 	"webplus-openapi/pkg/nsc"
 	"webplus-openapi/pkg/server"
 	"webplus-openapi/pkg/signals"
-	"webplus-openapi/pkg/store"
 	"webplus-openapi/pkg/util"
 
 	"github.com/spf13/cobra"
@@ -52,14 +51,14 @@ func startServer(cfg *server.Config, ctx context.Context) error {
 		zap.S().Fatal(err)
 	}
 
-	//初始化mysql(站群)
-	if err := db.InitDB(cfg.DB); err != nil {
+	//初始化源库
+	if err := db.InitSourceDB(cfg.SourceDB); err != nil {
 		zap.S().Fatalf("无法连接数据库。%s", err.Error())
 	}
 
-	// 初始化 db_storage（只读存储库）
-	if cfg.DBStorage != nil {
-		if err := db.InitTargetDB(cfg.DBStorage); err != nil {
+	// 初始化目标库
+	if cfg.TargetDB != nil {
+		if err := db.InitTargetDB(cfg.TargetDB); err != nil {
 			zap.S().Fatalf("无法连接 db_storage 数据库。%s", err.Error())
 		}
 	} else {
@@ -82,7 +81,6 @@ func startServer(cfg *server.Config, ctx context.Context) error {
 	g.Go(func() error { return server.GetInstance().Serve(cfg, ctx) })
 	g.Go(func() error {
 		<-c.Done()
-		store.CloseBadgerStore()
 		_ = webServer.GracefulShutdown(c)
 		return c.Err()
 	})

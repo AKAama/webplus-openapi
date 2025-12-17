@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,12 +13,10 @@ import (
 	"webplus-openapi/pkg/db"
 	"webplus-openapi/pkg/models"
 	"webplus-openapi/pkg/nsc"
-	"webplus-openapi/pkg/store"
 
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/pkg/errors"
 	"github.com/samber/lo"
-	"github.com/timshannon/badgerhold/v4"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -37,10 +36,10 @@ type Articles struct {
 }
 
 const (
-	OperateArtUpdate      = "1" //文章新增或修改
-	OperateArtDelete      = "2" //文章删除
-	OPERATE_COLART_DELETE = "7"
-	OPERATE_COLART_CREATE = "8"
+	OperateArtUpdate    = "1" //文章新增或修改
+	OperateArtDelete    = "2" //文章删除
+	OperateColArtDelete = "7"
+	OperateColArtCreate = "8"
 )
 
 var once sync.Once
@@ -187,9 +186,9 @@ func (w *Manager) handleOneMsg(msg jetstream.Msg) error {
 		err = w.handleArticleUpdate(&article)
 	case OperateArtDelete:
 		err = delArticleById(&article)
-	case OPERATE_COLART_DELETE:
+	case OperateColArtDelete:
 		err = deleteColumnArtsByArtId(&article)
-	case OPERATE_COLART_CREATE:
+	case OperateColArtCreate:
 		err = updateColumnArtsByArtId(&article)
 	}
 	return err
@@ -215,12 +214,13 @@ func (w *Manager) handleArticleUpdate(article *Article) error {
 
 // QueryArticleById 根据文章id来查询mysql文章信息
 func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
-	webplusDB := db.GetSourceDB()
+	sourceDB := db.GetSourceDB()
 
 	// 使用临时结构体避免切片字段问题
 	type ArticleQueryResult struct {
 		ArticleId      string     `gorm:"column:articleId"`
 		Title          string     `gorm:"column:title"`
+		FolderId       string     `gorm:"column:folderId"`
 		ShortTitle     string     `gorm:"column:shortTitle"`
 		AuxiliaryTitle string     `gorm:"column:auxiliaryTitle"`
 		CreatorName    string     `gorm:"column:creatorName"`
@@ -251,7 +251,7 @@ func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
 
 	var queryResult ArticleQueryResult
 	fieldSelect := buildArticleFieldSelect("ta")
-	baseSelect := "SELECT ts.name as siteName, tsa.siteId AS siteId, ta.id AS articleId, " +
+	baseSelect := "SELECT ts.name as siteName, tsa.siteId AS siteId, ta.id AS articleId, ta.folderId as folderId, " +
 		"ta.linkUrl AS visitUrl, " +
 		"tc.id AS columnId, tc.name AS columnName, ta.title AS title, " +
 		"ta.shortTitle as shortTitle, ta.auxiliaryTitle as auxiliaryTitle, " +
@@ -261,7 +261,7 @@ func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
 		"ta.imagedir AS imageDir, ta.filepath AS filePath"
 	sql := fmt.Sprintf("%s, %s %s", baseSelect, fieldSelect, query.String())
 
-	err := webplusDB.Raw(sql, params...).Scan(&queryResult)
+	err := sourceDB.Raw(sql, params...).Scan(&queryResult)
 	if err.Error != nil {
 		return nil
 	}
@@ -273,6 +273,7 @@ func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
 	// 手动构建ArticleInfo结构体
 	articleInfo := &models.ArticleInfo{
 		ArticleId:      queryResult.ArticleId,
+		FolderId:       queryResult.FolderId,
 		Title:          queryResult.Title,
 		ShortTitle:     queryResult.ShortTitle,
 		AuxiliaryTitle: queryResult.AuxiliaryTitle,
@@ -299,7 +300,7 @@ func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
 	}
 
 	contentSQL := "SELECT content FROM T_ARTICLECONTENT WHERE articleId = ?"
-	err = webplusDB.Raw(contentSQL, result.ArticleId).Scan(&contentList)
+	err = sourceDB.Raw(contentSQL, result.ArticleId).Scan(&contentList)
 	if err.Error != nil {
 		articleInfo.Content = ""
 	} else {
@@ -356,7 +357,23 @@ func queryColumnInfo(columnIdStr string) string {
 	return columnName
 }
 
-// 处理文章新增还是修改
+// querySiteInfo 根据栏目ID查询栏目名称
+func querySiteInfo(siteIdStr string) string {
+	if siteIdStr == "" {
+		return ""
+	}
+	webplusDB := db.GetSourceDB()
+	var siteName string
+	sql := "SELECT name FROM T_SITE WHERE id = ?"
+	err := webplusDB.Raw(sql, siteIdStr).Scan(&siteName)
+	if err.Error != nil {
+		zap.S().Errorf("查询栏目信息失败: columnId=%s, err=%v", siteIdStr, err.Error)
+		return ""
+	}
+	return siteName
+}
+
+// 处理文章新增还是修改：写入 targetDB 的 article_static / article_dynamic
 func handleArticleUpsert(artInfo *models.ArticleInfo) error {
 	if artInfo == nil {
 		return fmt.Errorf("文章信息为空，无法存储")
@@ -364,102 +381,218 @@ func handleArticleUpsert(artInfo *models.ArticleInfo) error {
 	if artInfo.LastModifyTime != nil && artInfo.LastModifyTime.IsZero() {
 		artInfo.LastModifyTime = nil
 	}
-	bs := store.GetBadgerStore()
-	return bs.Upsert(artInfo.ArticleId, artInfo)
-}
 
-func delArticleById(msg *Article) error {
-	bs := store.GetBadgerStore()
-	query := badgerhold.Where("ArticleId").Eq(msg.ArticleId)
-	return bs.DeleteMatching(&models.ArticleInfo{}, *query)
-}
+	targetDB := db.GetTargetDB()
+	if targetDB == nil {
+		return fmt.Errorf("targetDB 未初始化")
+	}
 
-// updateColumnArtsByArtId 栏目文章新增 - 在现有文章的columnId中添加新的栏目ID
-func updateColumnArtsByArtId(msg *Article) error {
-	bs := store.GetBadgerStore()
-
-	// 从Badger中获取现有文章信息
-	var existingArticle models.ArticleInfo
-	err := bs.Get(msg.ArticleId, &existingArticle)
+	articleIDInt, err := strconv.ParseInt(artInfo.ArticleId, 10, 64)
 	if err != nil {
-		zap.S().Errorf("获取文章信息失败: articleId=%s, err=%v", msg.ArticleId, err)
-		return fmt.Errorf("获取文章信息失败: %v", err)
+		return fmt.Errorf("articleId 转换失败: %v", err)
 	}
 
-	// 检查publishColumnId是否已经存在
-	columnIdStr := msg.PublishColumnId
-	columnNameStr := queryColumnInfo(columnIdStr)
-	exists := false
-	for _, existingColumnId := range existingArticle.ColumnId {
-		if existingColumnId == columnIdStr {
-			exists = true
-			break
+	tx := targetDB.Begin()
+	if tx.Error != nil {
+		return fmt.Errorf("开启事务失败: %v", tx.Error)
+	}
+
+	// 清理旧数据
+	if err := tx.Table(models.TableNameArticleStatic).Where("articleId = ?", articleIDInt).Delete(nil).Error; err != nil {
+		tx.Rollback()
+		return fmt.Errorf("清理 article_static 失败: %v", err)
+	}
+	if err := tx.Table(models.TableNameArticleDynamic).Where("articleId = ?", articleIDInt).Delete(nil).Error; err != nil {
+		tx.Rollback()
+		return fmt.Errorf("清理 article_dynamic 失败: %v", err)
+	}
+
+	// 写入 article_static（创建站点 URL）
+	articleRow := map[string]interface{}{
+		"articleId":      articleIDInt,
+		"createSiteId":   artInfo.SiteId,
+		"folderId":       artInfo.FolderId,
+		"title":          artInfo.Title,
+		"shortTitle":     artInfo.ShortTitle,
+		"auxiliaryTitle": artInfo.AuxiliaryTitle,
+		"creatorName":    artInfo.CreatorName,
+		"summary":        artInfo.Summary,
+		"publishTime":    artInfo.PublishTime,
+		"lastModifyTime": artInfo.LastModifyTime,
+		"visitUrl":       artInfo.VisitUrl,
+		"createTime":     artInfo.CreateTime,
+		"firstImgPath":   artInfo.FirstImgPath,
+		"imageDir":       artInfo.ImageDir,
+		"filePath":       artInfo.FilePath,
+		"publisherName":  artInfo.PublisherName,
+		"publishOrgName": artInfo.PublishOrgName,
+		"content":        artInfo.Content,
+	}
+
+	// 扩展字段 field1-50
+	fieldsValue := reflect.ValueOf(artInfo.ArticleFields)
+	fieldsType := fieldsValue.Type()
+	for i := 0; i < fieldsType.NumField(); i++ {
+		field := fieldsType.Field(i)
+		fieldValue := fieldsValue.Field(i)
+		fieldName := strings.ToLower(field.Name) // Field1 -> field1
+		articleRow[fieldName] = fieldValue.String()
+	}
+
+	if err := tx.Table(models.TableNameArticleStatic).Create(&articleRow).Error; err != nil {
+		tx.Rollback()
+		return fmt.Errorf("写入 article_static 失败: %v", err)
+	}
+
+	// 写入 article_dynamic（按当前 Id/Name 列表）
+	for i := range artInfo.ColumnId {
+		colIDStr := artInfo.ColumnId[i]
+		colName := ""
+		if i < len(artInfo.ColumnName) {
+			colName = artInfo.ColumnName[i]
 		}
-	}
-
-	// 如果不存在，则添加
-	if !exists {
-		existingArticle.ColumnId = append(existingArticle.ColumnId, columnIdStr)
-		existingArticle.ColumnName = append(existingArticle.ColumnName, columnNameStr)
-		zap.S().Debugf("为文章 %s 添加栏目ID: %s", msg.ArticleId, columnIdStr)
-
-		// 更新到Badger
-		err = bs.Upsert(msg.ArticleId, &existingArticle)
+		colIDInt, err := strconv.ParseInt(colIDStr, 10, 64)
 		if err != nil {
-			zap.S().Errorf("更新文章栏目信息失败: articleId=%s, err=%v", msg.ArticleId, err)
-			return fmt.Errorf("更新文章栏目信息失败: %v", err)
+			zap.S().Warnf("解析栏目ID失败: articleId=%s, columnId=%s, err=%v", artInfo.ArticleId, colIDStr, err)
+			continue
 		}
+		colRow := map[string]interface{}{
+			"articleId":  articleIDInt,
+			"columnId":   colIDInt,
+			"columnName": colName,
+			"siteId":     artInfo.SiteId,
+			"siteName":   artInfo.SiteName,
+			"url":        artInfo.VisitUrl,
+		}
+		if err := tx.Table(models.TableNameArticleDynamic).Create(&colRow).Error; err != nil {
+			tx.Rollback()
+			return fmt.Errorf("写入 article_dynamic 失败: %v", err)
+		}
+	}
 
-		zap.S().Infof("成功为文章 %s 添加栏目ID: %s", msg.ArticleId, columnIdStr)
-	} else {
-		zap.S().Debugf("文章 %s 的栏目ID %s 已存在，跳过添加", msg.ArticleId, columnIdStr)
+	// 写入 article_attachment
+	if len(artInfo.Attachment) > 0 {
+		for _, att := range artInfo.Attachment {
+			attRow := map[string]interface{}{
+				"articleId": articleIDInt,
+				"name":      att.Name,
+				"path":      att.Path,
+			}
+			if err := tx.Table(models.TableNameArticleAttachment).Create(&attRow).Error; err != nil {
+				tx.Rollback()
+				return fmt.Errorf("写入 article_attachment 失败: %v", err)
+			}
+		}
+	}
+
+	if err := tx.Commit().Error; err != nil {
+		return fmt.Errorf("提交事务失败: %v", err)
 	}
 
 	return nil
 }
 
-// deleteColumnArtsByArtId 栏目文章删除 - 从现有文章的columnId中移除指定的栏目ID
-func deleteColumnArtsByArtId(msg *Article) error {
-	bs := store.GetBadgerStore()
-
-	// 从Badger中获取现有文章信息
-	var existingArticle models.ArticleInfo
-	err := bs.Get(msg.ArticleId, &existingArticle)
+// delArticleById 文章删除：删除 targetDB 中的 article_static / article_dynamic 记录
+func delArticleById(msg *Article) error {
+	targetDB := db.GetTargetDB()
+	if targetDB == nil {
+		return fmt.Errorf("targetDB 未初始化")
+	}
+	articleIDInt, err := strconv.ParseInt(msg.ArticleId, 10, 64)
 	if err != nil {
-		zap.S().Errorf("获取文章信息失败: articleId=%s, err=%v", msg.ArticleId, err)
-		return fmt.Errorf("获取文章信息失败: %v", err)
+		return fmt.Errorf("articleId 转换失败: %v", err)
+	}
+	tx := targetDB.Begin()
+	if tx.Error != nil {
+		return fmt.Errorf("开启事务失败: %v", tx.Error)
+	}
+	if err := tx.Table(models.TableNameArticleStatic).Where("articleId = ?", articleIDInt).Delete(nil).Error; err != nil {
+		tx.Rollback()
+		return fmt.Errorf("删除 article_static 失败: %v", err)
+	}
+	if err := tx.Table(models.TableNameArticleDynamic).Where("articleId = ?", articleIDInt).Delete(nil).Error; err != nil {
+		tx.Rollback()
+		return fmt.Errorf("删除 article_dynamic 失败: %v", err)
+	}
+	if err := tx.Table(models.TableNameArticleAttachment).Where("articleId = ?", articleIDInt).Delete(nil).Error; err != nil {
+		tx.Rollback()
+		return fmt.Errorf("删除 article_attachment 失败: %v", err)
+	}
+	if err := tx.Commit().Error; err != nil {
+		return fmt.Errorf("提交事务失败: %v", err)
+	}
+	return nil
+}
+
+// updateColumnArtsByArtId 栏目文章新增：在 article_dynamic 中为文章增加一个栏目记录
+func updateColumnArtsByArtId(msg *Article) error {
+	targetDB := db.GetTargetDB()
+	if targetDB == nil {
+		return fmt.Errorf("targetDB 未初始化")
 	}
 
-	// 查找并移除指定的栏目ID
-	columnIdStr := msg.PublishColumnId
-	var newColumnIds []string
-	found := false
-
-	for _, existingColumnId := range existingArticle.ColumnId {
-		if existingColumnId != columnIdStr {
-			newColumnIds = append(newColumnIds, existingColumnId)
-		} else {
-			found = true
-		}
+	articleIDInt, err := strconv.ParseInt(msg.ArticleId, 10, 64)
+	if err != nil {
+		return fmt.Errorf("articleId 转换失败: %v", err)
+	}
+	colIDInt, err := strconv.ParseInt(msg.PublishColumnId, 10, 64)
+	if err != nil {
+		return fmt.Errorf("columnId 转换失败: %v", err)
 	}
 
-	// 如果找到了要删除的栏目ID，则更新
-	if found {
-		existingArticle.ColumnId = newColumnIds
-		zap.S().Debugf("从文章 %s 中移除栏目ID: %s", msg.ArticleId, columnIdStr)
+	columnNameStr := queryColumnInfo(msg.PublishColumnId)
 
-		// 更新到Badger
-		err = bs.Upsert(msg.ArticleId, &existingArticle)
-		if err != nil {
-			zap.S().Errorf("更新文章栏目信息失败: articleId=%s, err=%v", msg.ArticleId, err)
-			return fmt.Errorf("更新文章栏目信息失败: %v", err)
-		}
-
-		zap.S().Infof("成功从文章 %s 中移除栏目ID: %s", msg.ArticleId, columnIdStr)
-	} else {
-		zap.S().Debugf("文章 %s 中未找到栏目ID %s，跳过删除", msg.ArticleId, columnIdStr)
+	// 检查是否已存在
+	var count int64
+	if err := targetDB.Table(models.TableNameArticleDynamic).
+		Where("articleId = ? AND columnId = ?", articleIDInt, colIDInt).
+		Count(&count).Error; err != nil {
+		return fmt.Errorf("检查栏目记录失败: %v", err)
+	}
+	if count > 0 {
+		zap.S().Debugf("文章 %s 的栏目ID %s 已存在，跳过添加", msg.ArticleId, msg.PublishColumnId)
+		return nil
 	}
 
+	colRow := map[string]interface{}{
+		"articleId":  articleIDInt,
+		"columnId":   colIDInt,
+		"columnName": columnNameStr,
+		"siteId":     msg.SiteId,
+		"siteName":   querySiteInfo(msg.SiteId),
+		"url":        msg.VisitUrl,
+	}
+	if err := targetDB.Table(models.TableNameArticleDynamic).Create(&colRow).Error; err != nil {
+		return fmt.Errorf("写入 article_dynamic 失败: %v", err)
+	}
+
+	zap.S().Infof("成功为文章 %s 添加栏目ID: %s", msg.ArticleId, msg.PublishColumnId)
+	return nil
+}
+
+// deleteColumnArtsByArtId 栏目文章删除：从 article_dynamic 中删除指定栏目记录
+func deleteColumnArtsByArtId(msg *Article) error {
+	targetDB := db.GetTargetDB()
+	if targetDB == nil {
+		return fmt.Errorf("targetDB 未初始化")
+	}
+
+	articleIDInt, err := strconv.ParseInt(msg.ArticleId, 10, 64)
+	if err != nil {
+		return fmt.Errorf("articleId 转换失败: %v", err)
+	}
+	colIDInt, err := strconv.ParseInt(msg.PublishColumnId, 10, 64)
+	if err != nil {
+		return fmt.Errorf("columnId 转换失败: %v", err)
+	}
+
+	if err := targetDB.Table(models.TableNameArticleDynamic).
+		Where("articleId = ? AND columnId = ?", articleIDInt, colIDInt).
+		Delete(nil).Error; err != nil {
+		return fmt.Errorf("删除 article_dynamic 失败: %v", err)
+	}
+
+	zap.S().Infof("成功从文章 %s 中移除栏目ID: %s", msg.ArticleId, msg.PublishColumnId)
 	return nil
 }
 
@@ -470,9 +603,9 @@ func getOpearteName(operate string) string {
 		operateName = "文章新增或修改"
 	case OperateArtDelete:
 		operateName = "文章删除"
-	case OPERATE_COLART_DELETE:
+	case OperateColArtDelete:
 		operateName = "栏目文章删除"
-	case OPERATE_COLART_CREATE:
+	case OperateColArtCreate:
 		operateName = "栏目文章新增"
 	default:
 		operateName = "未知操作"

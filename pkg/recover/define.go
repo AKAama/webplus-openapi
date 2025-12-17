@@ -14,11 +14,10 @@ type ArticleRef struct {
 
 // Params RecoverParams 恢复参数
 type Params struct {
-	SiteID string `json:"site_id"` // 站点ID，空字符串表示所有站点
-	//ColumnID       string `json:"column_id"`        // 栏目ID，空字符串表示所有栏目
-	BatchSize      int `json:"batch_size"`       // 批次大小
-	Concurrency    int `json:"concurrency"`      // 并发数，默认为CPU核心数
-	WorkerPoolSize int `json:"worker_pool_size"` // Worker池大小，默认为并发数的2倍
+	SiteID         string `json:"site_id"`          // 站点ID，空字符串表示所有站点
+	BatchSize      int    `json:"batch_size"`       // 批次大小
+	Concurrency    int    `json:"concurrency"`      // 并发数，默认为CPU核心数
+	WorkerPoolSize int    `json:"worker_pool_size"` // Worker池大小，默认为并发数的2倍
 }
 
 // BatchResult 处理结果统计结构

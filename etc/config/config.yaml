@@ -1,4 +1,4 @@
-clientName: sdsmu #客户 ID
+clientName: mac mini #客户 ID
 port: 8700
 nats:
   endpoint: nats://1.94.184.24:4222 #nats://127.0.0.1:42222 #nats://170.18.9.86:4222
@@ -13,32 +13,35 @@ nats:
       seed: "SUAG5FS7H253CMJBZFATMT4E4CLPA22AX37DBUAGF3JPK4EJ7TQ7LBQ4LM"
       nkey: "UBUGBPDHPW44AA4I6YNUDJ4GFRSMNJFNMU64BMBJTQDXLLACII5CSXTP"
 sourceDB: #站群数据库
-  host: 170.18.9.31 #170.18.9.182
-  port: 54321
-  username: system
-  password: "qwer1234"
-  database: test
-  schema: webplus307 #金仓、postgres需要填写
-targetDB: #此api服务的mysql8数据库
+  driver: mysql #当前支持[kingbase,postgres,mysql]
   host: 127.0.0.1 #170.18.9.182
   port: 3306
   username: root
   password: "12344"
+  database: 3062
+  schema: webplus307 #金仓、postgres需要填写
+targetDB: #此api服务的mysql8数据库
+  host: 170.18.9.206 #170.18.9.182
+  port: 30337
+  username: root
+  password: "Sudy.web123"
   database: webplus_openapi
-  maxConnections: 600
+  schema: webplus307 #金仓、postgres需要填写
 # 响应字段配置，控制API返回哪些字段
 # 如果enabled_fields为空或不配置，则返回所有字段
 # 字段名不区分大小写，支持以下字段：
-# articleId, title, siteId, siteName, columnId, columnName, creatorName,
+# articleId, title, creatorName,
 # firstImgPath, summary, publishTime, lastModifyTime, visitUrl, content, attachment,
 # field1-field50 (扩展字段)
+# columnInfo这个字段是固定有的
 response_fields:
   enabled_fields:
     - articleId
     - title
-    - siteId
-    - siteName
-    - columnId
-    - columnName
+    - columnInfo
     - publishTime
     - visitUrl
+
+# 搜索配置：控制 keyWord 模糊匹配使用哪个字段
+search:
+ fuzzyField: field1

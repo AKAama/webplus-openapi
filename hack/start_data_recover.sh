@@ -71,14 +71,14 @@ start_container() {
 
     print_info "启动容器执行修复任务（运行完毕后容器将自动退出）..."
 
-    docker run --name "${CONTAINER_NAME}" \
+    docker run --name -d "${CONTAINER_NAME}" \
         -v "${HOST_CONFIG_FILE}:${CONTAINER_CONFIG_PATH}" \
         -v "${HOST_DATA_DIR}:${CONTAINER_DATA_PATH}" \
         "${FULL_IMAGE_NAME}" \
 
     # shellcheck disable=SC2181
     if [ $? -eq 0 ]; then
-        print_info "修复任务执行完成，容器已退出。"
+        print_info "修复任务执行正在执行中。"
     else
         print_error "修复任务执行失败，请检查日志。"
     fi

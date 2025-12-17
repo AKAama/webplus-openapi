@@ -54,14 +54,14 @@ func NewRecoverCommand() *cobra.Command {
 }
 
 func runHistoryDataRecover(cfg *recover.Config, params recover.Params) error {
-	// 1. 初始化源库 (sourceDB，支持 mysql/postgres)
-	if err := db.InitDB(cfg.SourceDB); err != nil {
+	// 1. 初始化源库
+	if err := db.InitSourceDB(cfg.SourceDB); err != nil {
 		zap.S().Errorf("源库初始化失败: %s", err.Error())
 		return fmt.Errorf("源库初始化失败: %w", err)
 	}
 	zap.S().Info("源库初始化成功")
 
-	// 1.2 初始化目标库 (targetDB，强制 MySQL)
+	// 1.2 初始化目标库
 	if err := db.InitTargetDB(cfg.TargetDB); err != nil {
 		zap.S().Errorf("目标库初始化失败: %s", err.Error())
 		return fmt.Errorf("目标库初始化失败: %w", err)

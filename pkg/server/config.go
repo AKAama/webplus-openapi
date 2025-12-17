@@ -15,10 +15,11 @@ import (
 type Config struct {
 	ClientName     string                `json:"client_name" yaml:"clientName"`
 	Port           int                   `json:"port,omitempty" yaml:"port,omitempty" mapstructure:"port"`
-	DB             *db.Config            `json:"db,omitempty" yaml:"db,omitempty" mapstructure:"db"`
-	DBStorage      *db.Config            `json:"db_storage,omitempty" yaml:"db_storage,omitempty" mapstructure:"db_storage"`
+	SourceDB       *db.Config            `json:"source_db,omitempty" yaml:"sourceDB,omitempty"`
+	TargetDB       *db.Config            `json:"target_db,omitempty" yaml:"targetDB,omitempty"`
 	Nats           *nsc.NatsConfig       `json:"nats,omitempty" yaml:"nats,omitempty" mapstructure:"nats"`
 	ResponseFields *ResponseFieldsConfig `json:"response_fields,omitempty" yaml:"response_fields,omitempty" mapstructure:"response_fields"`
+	Search         *SearchConfig         `json:"search,omitempty" yaml:"search,omitempty" mapstructure:"search"`
 }
 
 // ResponseFieldsConfig 响应字段配置
@@ -27,12 +28,18 @@ type ResponseFieldsConfig struct {
 	EnabledFields []string `json:"enabled_fields,omitempty" yaml:"enabled_fields,omitempty" mapstructure:"enabled_fields"`
 }
 
+// SearchConfig 搜索配置
+type SearchConfig struct {
+	// FuzzyField 指定模糊搜索使用的字段，如 "creator" 或 "field50"
+	FuzzyField string `json:"fuzzy_field,omitempty" yaml:"fuzzyField,omitempty" mapstructure:"fuzzyField"`
+}
+
 func (g *Config) Validate() []error {
 	var errs = make([]error, 0)
 	if err := util.IsValidPort(g.Port); err != nil {
 		errs = append(errs, err)
 	}
-	if es := g.DB.Validate(); len(es) > 0 {
+	if es := g.SourceDB.Validate(); len(es) > 0 {
 		errs = append(errs, es...)
 	}
 	return errs
@@ -40,10 +47,10 @@ func (g *Config) Validate() []error {
 
 func NewDefaultConfig() *Config {
 	return &Config{
-		Port:      3000,
-		DB:        db.NewDefaultDBConfig(),
-		DBStorage: db.NewDefaultDBConfig(),
-		Nats:      nsc.NewDefaultNatsConfig(),
+		Port:     3000,
+		SourceDB: db.NewDefaultDBConfig(),
+		TargetDB: db.NewDefaultDBConfig(),
+		Nats:     nsc.NewDefaultNatsConfig(),
 	}
 }
 func TryLoadFromDisk(configFilePath string) (*Config, error) {

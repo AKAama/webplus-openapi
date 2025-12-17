@@ -2,8 +2,11 @@ package recover
 
 import (
 	"fmt"
+	"reflect"
 	"runtime"
 	"strconv"
+	"strings"
+	"time"
 	"webplus-openapi/pkg/db"
 	"webplus-openapi/pkg/models"
 
@@ -19,6 +22,7 @@ func (s *Service) RecoverHistoryData(params Params) error {
 	}
 
 	zap.S().Info("开始数据恢复任务")
+	startTime := time.Now()
 
 	// 创建文章服务
 	articleRepo := NewArticleRepository(s.sourceDB)
@@ -42,10 +46,11 @@ func (s *Service) RecoverHistoryData(params Params) error {
 	if err != nil {
 		return fmt.Errorf("并发批量处理失败: %w", err)
 	}
+	duration := time.Since(startTime)
 
 	// 输出最终统计
-	zap.S().Infof("数据恢复任务完成 - 总文章: %d, 实际处理: %d, 跳过: %d, 错误: %d",
-		len(articleRefs), result.ProcessedCount, result.SkippedCount, result.ErrorCount)
+	zap.S().Infof("数据恢复任务完成 - 总文章: %d, 实际处理: %d, 跳过: %d, 错误: %d ,耗时：%v",
+		len(articleRefs), result.ProcessedCount, result.SkippedCount, result.ErrorCount, duration)
 
 	return nil
 }
@@ -96,54 +101,6 @@ func (r *ArticleRepository) GetAllArticleRefs(params Params) ([]ArticleRef, erro
 	}
 
 	return articles, nil
-}
-
-// ProcessArticlesInBatches 批量处理文章
-func (as *ArticleService) ProcessArticlesInBatches(articles []ArticleRef, batchSize int) (*BatchResult, error) {
-	if len(articles) == 0 {
-		return &BatchResult{}, nil
-	}
-
-	totalResult := &BatchResult{}
-	totalBatches := (len(articles) + batchSize - 1) / batchSize
-
-	zap.S().Infof("开始批量处理，共 %d 篇文章，分 %d 个批次", len(articles), totalBatches)
-
-	// 分批处理
-	for i := 0; i < len(articles); i += batchSize {
-		end := i + batchSize
-		if end > len(articles) {
-			end = len(articles)
-		}
-
-		batch := articles[i:end]
-		batchNum := (i / batchSize) + 1
-		zap.S().Debugf("处理批次 [%d/%d] [%d-%d]", batchNum, totalBatches, i+1, end)
-
-		// 处理当前批次，增加重试机制
-		batchResult, err := as.processBatchWithRetry(batch, 3)
-		if err != nil {
-			zap.S().Errorf("批次 [%d/%d] 处理失败: %v", batchNum, totalBatches, err)
-			// 继续处理下一批次，而不是完全失败
-			totalResult.ErrorCount += len(batch)
-			continue
-		}
-
-		// 累计统计
-		totalResult.ProcessedCount += batchResult.ProcessedCount
-		totalResult.SkippedCount += batchResult.SkippedCount
-		totalResult.ErrorCount += batchResult.ErrorCount
-
-		// 批次完成日志
-		zap.S().Infof("批次 [%d/%d] 完成 - 处理: %d, 跳过: %d, 错误: %d",
-			batchNum, totalBatches, batchResult.ProcessedCount, batchResult.SkippedCount, batchResult.ErrorCount)
-
-		// 进度报告
-		progress := float64(batchNum) / float64(totalBatches) * 100
-		zap.S().Infof("整体进度: %.1f%% (%d/%d 批次)", progress, batchNum, totalBatches)
-	}
-
-	return totalResult, nil
 }
 
 // ProcessArticlesConcurrently 并发处理文章
@@ -269,7 +226,7 @@ func (as *ArticleService) processArticle(articleRef ArticleRef) ProcessResult {
 	}
 
 	var count int64
-	if err := targetDB.Table("article").Where("article_id = ?", articleIDInt).Count(&count).Error; err != nil {
+	if err := targetDB.Table("article_static").Where("articleId = ?", articleIDInt).Count(&count).Error; err != nil {
 		return ProcessResult{Status: fmt.Sprintf("检查文章存在性失败: %v", err)}
 	}
 	if count > 0 {
@@ -300,36 +257,58 @@ func (as *ArticleService) processArticle(articleRef ArticleRef) ProcessResult {
 	}
 
 	// 先清理旧数据（幂等）
-	if err := tx.Exec("DELETE FROM article_column WHERE article_id = ?", articleIDInt).Error; err != nil {
+	if err := tx.Exec("DELETE FROM article_static WHERE articleId = ?", articleIDInt).Error; err != nil {
 		tx.Rollback()
-		return ProcessResult{Status: fmt.Sprintf("清理 article_column 失败: %v", err)}
+		return ProcessResult{Status: fmt.Sprintf("清理 article_static 失败: %v", err)}
 	}
-	if err := tx.Exec("DELETE FROM article WHERE article_id = ?", articleIDInt).Error; err != nil {
+	if err := tx.Exec("DELETE FROM article_dynamic WHERE articleId = ?", articleIDInt).Error; err != nil {
 		tx.Rollback()
-		return ProcessResult{Status: fmt.Sprintf("清理 article 失败: %v", err)}
+		return ProcessResult{Status: fmt.Sprintf("清理 article_dynamic 失败: %v", err)}
+	}
+	if err := tx.Exec("DELETE FROM article_attachment WHERE articleId = ?", articleIDInt).Error; err != nil {
+		tx.Rollback()
+		return ProcessResult{Status: fmt.Sprintf("清理 article_attachment 失败: %v", err)}
 	}
 
-	// 插入 article
-	siteIDInt, _ := strconv.ParseInt(articleInfo.SiteId, 10, 64)
+	// 插入 article_static
 	articleRow := map[string]interface{}{
-		"article_id":       articleIDInt,
-		"site_id":          siteIDInt,
-		"site_name":        articleInfo.SiteName,
-		"title":            articleInfo.Title,
-		"summary":          articleInfo.Summary,
-		"creator_name":     articleInfo.CreatorName,
-		"publish_time":     articleInfo.PublishTime,
-		"last_modify_time": articleInfo.LastModifyTime,
-		"visit_url":        articleInfo.VisitUrl,
-		"first_img_path":   articleInfo.FirstImgPath,
-		"content":          articleInfo.Content,
-	}
-	if err := tx.Table("article").Create(&articleRow).Error; err != nil {
-		tx.Rollback()
-		return ProcessResult{Status: fmt.Sprintf("写入 article 失败: %v", err)}
+		"articleId":      articleIDInt,
+		"folderId":       articleInfo.FolderId,
+		"createSiteId":   articleInfo.SiteId,
+		"title":          articleInfo.Title,
+		"shortTitle":     articleInfo.ShortTitle,
+		"auxiliaryTitle": articleInfo.AuxiliaryTitle,
+		"creatorName":    articleInfo.CreatorName,
+		"summary":        articleInfo.Summary,
+		"publishTime":    articleInfo.PublishTime,
+		"lastModifyTime": articleInfo.LastModifyTime,
+		"visitUrl":       articleInfo.VisitUrl,
+		"createTime":     articleInfo.CreateTime,
+		"firstImgPath":   articleInfo.FirstImgPath,
+		"imageDir":       articleInfo.ImageDir,
+		"filePath":       articleInfo.FilePath,
+		"publisherName":  articleInfo.PublisherName,
+		"publishOrgName": articleInfo.PublishOrgName,
+		"content":        articleInfo.Content,
 	}
 
-	// 插入 article_column
+	// 使用反射添加 field1-50 扩展字段
+	fieldsValue := reflect.ValueOf(articleInfo.ArticleFields)
+	fieldsType := fieldsValue.Type()
+	for i := 0; i < fieldsType.NumField(); i++ {
+		field := fieldsType.Field(i)
+		fieldValue := fieldsValue.Field(i)
+		// 将字段名转换为小写（Field1 -> field1）
+		fieldName := strings.ToLower(field.Name)
+		articleRow[fieldName] = fieldValue.String()
+	}
+
+	if err := tx.Table("article_static").Create(&articleRow).Error; err != nil {
+		tx.Rollback()
+		return ProcessResult{Status: fmt.Sprintf("写入 article_static 失败: %v", err)}
+	}
+
+	// 插入 article_dynamic - 为每个栏目生成对应的 URL
 	for i := range articleInfo.ColumnId {
 		colIDStr := articleInfo.ColumnId[i]
 		colName := ""
@@ -341,14 +320,50 @@ func (as *ArticleService) processArticle(articleRef ArticleRef) ProcessResult {
 			zap.S().Warnf("解析栏目ID失败: articleId=%s, columnId=%s, err=%v", articleRef.ID, colIDStr, err)
 			continue
 		}
-		colRow := map[string]interface{}{
-			"article_id":  articleIDInt,
-			"column_id":   colIDInt,
-			"column_name": colName,
+
+		// 查询栏目信息（包括站点信息）
+		column, err := as.repo.queryColumnWithSiteInfo(colIDStr)
+		if err != nil {
+			zap.S().Warnf("查询栏目信息失败: articleId=%s, columnId=%s, err=%v", articleRef.ID, colIDStr, err)
+			// 即使查询失败也继续，使用默认值
+			column = &models.Column{
+				Id:         int(colIDInt),
+				Name:       colName,
+				SiteId:     column.SiteId,
+				SiteName:   column.SiteName,
+				DomainName: column.DomainName,
+			}
 		}
-		if err := tx.Table("article_column").Create(&colRow).Error; err != nil {
+
+		// 为每个栏目生成对应的 URL
+		columnUrl := as.repo.queryVisitUrlFromDB(articleRef.ID, column.SiteId, colIDStr)
+
+		colRow := map[string]interface{}{
+			"articleId":  articleIDInt,
+			"columnId":   colIDInt,
+			"columnName": colName,
+			"siteId":     column.SiteId,
+			"siteName":   column.SiteName,
+			"url":        columnUrl,
+		}
+		if err := tx.Table("article_dynamic").Create(&colRow).Error; err != nil {
 			tx.Rollback()
-			return ProcessResult{Status: fmt.Sprintf("写入 article_column 失败: %v", err)}
+			return ProcessResult{Status: fmt.Sprintf("写入 article_dynamic 失败: %v", err)}
+		}
+	}
+
+	// 插入附件信息
+	if len(articleInfo.Attachment) > 0 {
+		for _, att := range articleInfo.Attachment {
+			attRow := map[string]interface{}{
+				"articleId": articleIDInt,
+				"name":      att.Name,
+				"path":      att.Path,
+			}
+			if err := tx.Table(models.TableNameArticleAttachment).Create(&attRow).Error; err != nil {
+				tx.Rollback()
+				return ProcessResult{Status: fmt.Sprintf("写入 article_attachment 失败: %v", err)}
+			}
 		}
 	}
 
@@ -356,6 +371,6 @@ func (as *ArticleService) processArticle(articleRef ArticleRef) ProcessResult {
 		return ProcessResult{Status: fmt.Sprintf("提交事务失败: %v", err)}
 	}
 
-	zap.S().Debugf("成功恢复文章 %s 到 targetDB.article/article_column", articleRef.ID)
+	zap.S().Debugf("成功恢复文章 %s 到 targetDB.article_static/article_dynamic", articleRef.ID)
 	return ProcessResult{Status: "processed"}
 }

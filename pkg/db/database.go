@@ -4,6 +4,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"webplus-openapi/pkg/models"
 
 	"go.uber.org/zap"
 	"gorm.io/driver/mysql"
@@ -17,13 +18,13 @@ var databaseOnce sync.Once
 var gormTargetDB *gorm.DB
 var targetOnce sync.Once
 
-// InitDB 初始化源库（支持 mysql/postgres）
-func InitDB(cfg *Config) error {
+// InitSourceDB 初始化源库
+func InitSourceDB(cfg *Config) error {
 	var err error
 	databaseOnce.Do(func() {
 		driver := strings.ToLower(cfg.Driver)
 		var dial gorm.Dialector
-		if driver == "postgres" {
+		if driver == "postgres" || driver == "kingbase" {
 			dial = postgres.Open(cfg.DSN())
 		} else {
 			dial = mysql.New(mysql.Config{DSN: cfg.DSN()})
@@ -67,10 +68,11 @@ func InitTargetDB(cfg *Config) error {
 		if cfg != nil && cfg.Debug {
 			gormTargetDB = gormTargetDB.Debug()
 		}
+		err := gormTargetDB.AutoMigrate(&models.ArticleStatic{}, &models.ArticleDynamic{}, &models.ArticleAttachment{})
 		if err != nil {
 			return
 		}
-		zap.S().Debug("*** targetDB 数据库初始化完成 (MySQL) ***")
+		zap.S().Debug("*** targetDB 数据库初始化完成 ***")
 	})
 	return err
 }
