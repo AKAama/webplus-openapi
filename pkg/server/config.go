@@ -31,7 +31,7 @@ type ResponseFieldsConfig struct {
 // SearchConfig 搜索配置
 type SearchConfig struct {
 	// FuzzyField 指定模糊搜索使用的字段，如 "creator" 或 "field50"
-	FuzzyField string `json:"fuzzy_field,omitempty" yaml:"fuzzyField,omitempty" mapstructure:"fuzzyField"`
+	FuzzyField []string `json:"fuzzy_field,omitempty" yaml:"fuzzyFields,omitempty" mapstructure:"fuzzyField"`
 }
 
 func (g *Config) Validate() []error {

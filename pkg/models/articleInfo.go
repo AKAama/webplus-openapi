@@ -92,11 +92,10 @@ type ArticleFields struct {
 // Column 栏目信息
 type Column struct {
 	ArticleId  int64  `json:"articleId" gorm:"column:articleId"`
-	Id         int    `json:"id" gorm:"column:id"`
-	Name       string `json:"name" gorm:"column:name"`
+	ColumnId   int    `json:"columnId" gorm:"column:columnId"`
+	ColumnName string `json:"columnName" gorm:"column:columnName"`
 	SiteId     string `json:"siteId" gorm:"column:siteId"`
 	SiteName   string `json:"siteName" gorm:"column:siteName"`
-	DomainName string `json:"domainName" gorm:"column:domainName"`
 	Url        string `json:"url" gorm:"column:url"`
 }
 

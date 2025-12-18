@@ -33,7 +33,6 @@ func (h *Handler) GetArticles(c *gin.Context) {
 	articleIdStr := c.Query("articleId")
 
 	title := c.Query("title")
-	keyWord := c.Query("keyWord")
 	startTimeStr := c.Query("startTime")
 	endTimeStr := c.Query("endTime")
 
@@ -189,10 +188,12 @@ func (h *Handler) GetArticles(c *gin.Context) {
 		query = query.Where("title LIKE ?", like)
 	}
 
-	if h.cfg.Search != nil && h.cfg.Search.FuzzyField != "" {
-		f := strings.ToLower(h.cfg.Search.FuzzyField)
-		like := "%" + keyWord + "%"
-		query = query.Where(f+" LIKE ?", like)
+	for _, field := range h.cfg.Search.FuzzyField {
+		keyword := c.Query(field) // 自动用字段名作为 query 参数名
+		if keyword != "" {
+			likeValue := "%" + strings.TrimSpace(keyword) + "%"
+			query = query.Where(fmt.Sprintf("%s LIKE ?", field), likeValue)
+		}
 	}
 
 	// 时间范围过滤
@@ -277,10 +278,10 @@ func (h *Handler) GetArticles(c *gin.Context) {
 
 		if cols, ok := columnMap[r.ArticleId]; ok {
 			// 保持按 columnId 升序
-			sort.Slice(cols, func(i, j int) bool { return cols[i].Id < cols[j].Id })
+			sort.Slice(cols, func(i, j int) bool { return cols[i].ColumnId < cols[j].ColumnId })
 			for _, cRow := range cols {
-				a.ColumnId = append(a.ColumnId, strconv.FormatInt(int64(cRow.Id), 10))
-				a.ColumnName = append(a.ColumnName, cRow.Name)
+				a.ColumnId = append(a.ColumnId, strconv.FormatInt(int64(cRow.ColumnId), 10))
+				a.ColumnName = append(a.ColumnName, cRow.ColumnName)
 			}
 		}
 		if atts, ok := attachMap[r.ArticleId]; ok {
@@ -316,8 +317,8 @@ func (h *Handler) GetArticles(c *gin.Context) {
 			columnsArr := make([]gin.H, 0, len(cols))
 			for _, cRow := range cols {
 				columnsArr = append(columnsArr, gin.H{
-					"columnId":   strconv.FormatInt(int64(cRow.Id), 10),
-					"columnName": cRow.Name,
+					"columnId":   strconv.FormatInt(int64(cRow.ColumnId), 10),
+					"columnName": cRow.ColumnName,
 					"siteId":     cRow.SiteId,
 					"siteName":   cRow.SiteName,
 					"url":        cRow.Url,
@@ -328,7 +329,7 @@ func (h *Handler) GetArticles(c *gin.Context) {
 			// 如果按 columnId 精确过滤，优先使用对应栏目的 URL 覆盖 visitUrl
 			if filterColumnId != "" {
 				for _, cRow := range cols {
-					if strconv.FormatInt(int64(cRow.Id), 10) == filterColumnId && cRow.Url != "" {
+					if strconv.FormatInt(int64(cRow.ColumnId), 10) == filterColumnId && cRow.Url != "" {
 						item["visitUrl"] = cRow.Url
 						break
 					}

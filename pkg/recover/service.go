@@ -172,15 +172,15 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 	var singleFolderColumn models.Column
 	var firstColumn []int
 	q1 := r.db.Table("T_COLUMN c").
-		Select("c.id,c.name").
+		Select("c.id as columnId,c.name as columnName").
 		Where("c.singleFolderId = ?", folderIdInt)
 	if err := q1.Find(&singleFolderColumn).Error; err != nil {
 		zap.S().Errorw("GetArticleById.singleFolderColumn", "err", err)
 	}
-	if singleFolderColumn.Id > 0 {
-		columnIdMap[singleFolderColumn.Id] = singleFolderColumn.Name
+	if singleFolderColumn.ColumnId > 0 {
+		columnIdMap[singleFolderColumn.ColumnId] = singleFolderColumn.ColumnName
 		columns = append(columns, singleFolderColumn)
-		firstColumn = append(firstColumn, singleFolderColumn.Id)
+		firstColumn = append(firstColumn, singleFolderColumn.ColumnId)
 	}
 	zap.S().Debugf("唯一来源 - 根据文件夹ID查找栏目: %v", firstColumn)
 
@@ -188,7 +188,7 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 	var dataSourceColumns []models.Column
 	var secondColumn []int
 	if err := r.db.Table("T_COLUMN_DATASOURCE cds").
-		Select("cds.SrcColumnId as id,c.name").
+		Select("cds.SrcColumnId as columnId,c.name as columnName").
 		Joins("JOIN T_COLUMN c on cds.SrcColumnId = c.id").
 		Where("cds.mappingObjectId = ?", folderIdInt).
 		Where("cds.mappingTypeId = ?", 0).
@@ -196,12 +196,12 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 		zap.S().Errorw("GetArticleById.dataSourceColumns", "err", err)
 	}
 	for _, ds := range dataSourceColumns {
-		if _, exists := columnIdMap[ds.Id]; exists {
+		if _, exists := columnIdMap[ds.ColumnId]; exists {
 			continue
 		}
-		columnIdMap[ds.Id] = ds.Name
+		columnIdMap[ds.ColumnId] = ds.ColumnName
 		columns = append(columns, ds)
-		secondColumn = append(secondColumn, ds.Id)
+		secondColumn = append(secondColumn, ds.ColumnId)
 	}
 	zap.S().Debugf("获取将文件夹设置为信息源的栏目: %v", secondColumn)
 
@@ -209,19 +209,19 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 	var colArtColumns []models.Column
 	var thirdColumn []int
 	if err := r.db.Table("T_COLUMN c").
-		Select("c.id,c.name").
+		Select("c.id as columnId ,c.name as columnName ").
 		Joins("JOIN T_COLUMNARTICLE ca ON c.id=ca.columnId").
 		Where("ca.articleId = ?", articleIdInt).
 		Find(&colArtColumns).Error; err != nil {
 		zap.S().Errorw("GetArticleById.colArtColumns", "err", err)
 	}
 	for _, ca := range colArtColumns {
-		if _, exists := columnIdMap[ca.Id]; exists {
+		if _, exists := columnIdMap[ca.ColumnId]; exists {
 			continue
 		}
-		columnIdMap[ca.Id] = ca.Name
+		columnIdMap[ca.ColumnId] = ca.ColumnName
 		columns = append(columns, ca)
-		thirdColumn = append(thirdColumn, ca.Id)
+		thirdColumn = append(thirdColumn, ca.ColumnId)
 	}
 	zap.S().Debugf("根据文章获取直接跨站和多栏发布的栏目: %v", thirdColumn)
 
@@ -376,7 +376,7 @@ func (r *ArticleRepository) getDataSourceColumn(columnIdMap map[int]string, colu
 		err := r.db.Table("T_COLUMN_DATASOURCE cds").
 			Select("cds.SrcColumnId as id,c.name").
 			Joins("JOIN T_COLUMN c on cds.SrcColumnId = c.id").
-			Where("cds.mappingObjectId = ?", column.Id).
+			Where("cds.mappingObjectId = ?", column.ColumnId).
 			Where("cds.mappingTypeId = ?", 1).
 			Find(&cs).Error
 		if err != nil {
@@ -386,12 +386,12 @@ func (r *ArticleRepository) getDataSourceColumn(columnIdMap map[int]string, colu
 		if len(cs) > 0 {
 			newColumns := make([]models.Column, 0)
 			for _, c := range cs {
-				if _, exists := columnIdMap[c.Id]; exists {
+				if _, exists := columnIdMap[c.ColumnId]; exists {
 					continue
 				}
-				nc := models.Column{Id: c.Id, Name: c.Name}
+				nc := models.Column{ColumnId: c.ColumnId, ColumnName: c.ColumnName}
 				newColumns = append(newColumns, nc)
-				columnIdMap[c.Id] = c.Name
+				columnIdMap[c.ColumnId] = c.ColumnName
 				*columns = append(*columns, c)
 			}
 			r.getDataSourceColumn(columnIdMap, &newColumns)
@@ -482,7 +482,7 @@ func (r *ArticleRepository) querySiteByColumnId(columnId string) (siteId string,
 // queryColumnWithSiteInfo 查询栏目信息（包括站点信息）
 func (r *ArticleRepository) queryColumnWithSiteInfo(columnId string) (*models.Column, error) {
 	var column models.Column
-	columnSQL := `SELECT c.id, c.name, c.siteId, s.name as siteName, s.DOMAINNAME as domainName
+	columnSQL := `SELECT c.id as columnId, c.name as columnName, c.siteId, s.name as siteName
 		FROM T_COLUMN c
 		JOIN T_SITE s ON c.siteId = s.id
 		WHERE c.id = ?`

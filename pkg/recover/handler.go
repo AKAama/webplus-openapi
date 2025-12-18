@@ -327,11 +327,10 @@ func (as *ArticleService) processArticle(articleRef ArticleRef) ProcessResult {
 			zap.S().Warnf("查询栏目信息失败: articleId=%s, columnId=%s, err=%v", articleRef.ID, colIDStr, err)
 			// 即使查询失败也继续，使用默认值
 			column = &models.Column{
-				Id:         int(colIDInt),
-				Name:       colName,
+				ColumnId:   int(colIDInt),
+				ColumnName: colName,
 				SiteId:     column.SiteId,
 				SiteName:   column.SiteName,
-				DomainName: column.DomainName,
 			}
 		}
 
