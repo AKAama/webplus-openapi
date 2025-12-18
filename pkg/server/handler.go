@@ -378,8 +378,6 @@ func (h *Handler) buildArticleResponse(a models.ArticleInfo) gin.H {
 	fullData := gin.H{
 		"articleId":      a.ArticleId,
 		"title":          a.Title,
-		"siteId":         a.SiteId,
-		"siteName":       a.SiteName,
 		"creatorName":    a.CreatorName,
 		"firstImgPath":   a.FirstImgPath,
 		"summary":        a.Summary,
