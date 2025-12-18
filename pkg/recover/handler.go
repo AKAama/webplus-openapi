@@ -3,6 +3,8 @@ package recover
 import (
 	"fmt"
 	"runtime"
+	"sync"
+	"time"
 	"webplus-openapi/pkg/models"
 
 	"github.com/pkg/errors"
@@ -35,16 +37,17 @@ func (s *Service) RecoverHistoryData(params Params) error {
 		zap.S().Info("没有需要恢复的文章")
 		return nil
 	}
-
+	startTime := time.Now()
 	// 执行并发批量恢复
 	result, err := articleService.ProcessArticlesConcurrently(articleRefs, params)
 	if err != nil {
 		return fmt.Errorf("并发批量处理失败: %w", err)
 	}
+	duration := time.Since(startTime)
 
 	// 输出最终统计
-	zap.S().Infof("数据恢复任务完成 - 总文章: %d, 实际处理: %d, 跳过: %d, 错误: %d",
-		len(articleRefs), result.ProcessedCount, result.SkippedCount, result.ErrorCount)
+	zap.S().Infof("数据恢复任务完成 - 总文章: %d, 实际处理: %d, 跳过: %d, 错误: %d ,耗时：%v",
+		len(articleRefs), result.ProcessedCount, result.SkippedCount, result.ErrorCount, duration)
 
 	return nil
 }
@@ -162,33 +165,59 @@ func (as *ArticleService) ProcessArticlesConcurrently(articles []ArticleRef, par
 
 	result := &BatchResult{}
 
-	// 顺序处理每个批次
+	// 并发处理每个批次，限制批次数并发度
+	concurrency := params.Concurrency
+	if concurrency <= 0 {
+		concurrency = runtime.NumCPU()
+	}
+	if concurrency > 32 {
+		concurrency = 32
+	}
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, concurrency)
+	var mu sync.Mutex
+
 	for i, batch := range batches {
 		batchNum := i + 1
-		zap.S().Infof("处理批次 [%d/%d]，包含 %d 篇文章", batchNum, totalBatches, len(batch))
+		batch := batch
 
-		// 处理当前批次
-		batchResult, err := as.processBatchWithRetry(batch, 3)
-		if err != nil {
-			zap.S().Errorf("批次 [%d/%d] 处理失败: %v", batchNum, totalBatches, err)
-			// 将整个批次标记为错误
-			result.ErrorCount += len(batch)
-			continue
-		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(num int) {
+			defer wg.Done()
+			defer func() { <-sem }()
 
-		// 累计统计
-		result.ProcessedCount += batchResult.ProcessedCount
-		result.SkippedCount += batchResult.SkippedCount
-		result.ErrorCount += batchResult.ErrorCount
+			zap.S().Infof("处理批次 [%d/%d]，包含 %d 篇文章", num, totalBatches, len(batch))
 
-		// 批次完成日志
-		zap.S().Infof("批次 [%d/%d] 完成 - 处理: %d, 跳过: %d, 错误: %d",
-			batchNum, totalBatches, batchResult.ProcessedCount, batchResult.SkippedCount, batchResult.ErrorCount)
+			batchResult, err := as.processBatchWithRetry(batch, 3)
 
-		// 进度报告
-		progress := float64(batchNum) / float64(totalBatches) * 100
-		zap.S().Infof("整体进度: %.1f%% (%d/%d 批次)", progress, batchNum, totalBatches)
+			mu.Lock()
+			defer mu.Unlock()
+
+			if err != nil {
+				zap.S().Errorf("批次 [%d/%d] 处理失败: %v", num, totalBatches, err)
+				// 将整个批次标记为错误
+				result.ErrorCount += len(batch)
+				return
+			}
+
+			// 累计统计
+			result.ProcessedCount += batchResult.ProcessedCount
+			result.SkippedCount += batchResult.SkippedCount
+			result.ErrorCount += batchResult.ErrorCount
+
+			// 批次完成日志
+			zap.S().Infof("批次 [%d/%d] 完成 - 处理: %d, 跳过: %d, 错误: %d",
+				num, totalBatches, batchResult.ProcessedCount, batchResult.SkippedCount, batchResult.ErrorCount)
+
+			// 进度报告
+			progress := float64(num) / float64(totalBatches) * 100
+			zap.S().Infof("整体进度: %.1f%% (%d/%d 批次)", progress, num, totalBatches)
+		}(batchNum)
 	}
+
+	wg.Wait()
 
 	zap.S().Infof("处理完成 - 总文章: %d, 实际处理: %d, 跳过: %d, 错误: %d",
 		len(articles), result.ProcessedCount, result.SkippedCount, result.ErrorCount)

@@ -2,6 +2,7 @@ package recover
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -298,7 +299,7 @@ func (r *ArticleRepository) RestoreArticleInfos(articleInfo *models.ArticleInfo)
 	if articleInfo.FirstImgPath != "" {
 		// 获取基础域名用于图片路径处理
 		baseDomain := r.getBaseDomain(articleInfo.SiteId)
-		articleInfo.FirstImgPath = r.processImagePath(articleInfo.FirstImgPath, articleInfo.FilePath, baseDomain)
+		articleInfo.FirstImgPath = "http://" + r.processImagePath(articleInfo.FirstImgPath, articleInfo.FilePath, baseDomain)
 	}
 
 	zap.S().Debugf("成功修复文章访问地址: articleId=%s, visitUrl=%s", articleInfo.ArticleId, articleInfo.VisitUrl)
@@ -357,7 +358,7 @@ func (r *ArticleRepository) queryMediaFileByObjId(articleInfo *models.ArticleInf
 				// 处理服务器名称，去掉/main.部分
 				serArr := strings.Split(serverName, "/main.")
 				if len(serArr) > 0 {
-					attachments[i].Path = serArr[0] + attachments[i].Path
+					attachments[i].Path = "http://" + serArr[0] + attachments[i].Path
 				}
 			}
 		}
@@ -424,11 +425,21 @@ func (r *ArticleRepository) queryVisitUrlFromDB(articleId string, siteId string,
 	// 计算基础域名
 	var baseDomain string
 	if site.DomainName != "" {
-		baseDomain = site.DomainName
+		// 使用正则分割多种分隔符
+		re := regexp.MustCompile(`[,，]+`)
+		parts := re.Split(site.DomainName, -1)
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				baseDomain = part
+				break
+			}
+		}
 	} else if site.ParentId != "" {
 		// 查询父站点域名
 		var parentDomain string
 		var parentSiteId string
+		var domainSeparator = regexp.MustCompile(`[,，\s;]+`)
 		siteParentSQL := "SELECT SITEID FROM T_PUBLISHSITE WHERE id = ?"
 		err2 := r.db.Raw(siteParentSQL, site.ParentId).Scan(&parentSiteId)
 		parentSQL := "SELECT DOMAINNAME FROM T_SITE WHERE id = ?"
@@ -438,6 +449,18 @@ func (r *ArticleRepository) queryVisitUrlFromDB(articleId string, siteId string,
 		if err2.Error != nil {
 			zap.S().Errorf("查询父站点域名失败: %v", err2.Error)
 			return ""
+		}
+		zap.S().Infof("原始 DOMAINNAME: %q", parentDomain)
+		for i, r := range parentDomain {
+			zap.S().Debugf("char[%d] = %c (U+%04X)", i, r, r)
+		}
+		parts := domainSeparator.Split(parentDomain, -1)
+		for _, part := range parts {
+			part = strings.TrimSpace(part)
+			if part != "" {
+				parentDomain = part
+				break
+			}
 		}
 		baseDomain = parentDomain + "/_s" + siteId
 	}
