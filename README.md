@@ -1,4 +1,8 @@
 # 文章api文档
+## 3.0.1
+### recover
+1. 修复domainName含有多个的情况，逗号分割
+
 
 ## 3.0.0
 ### server&recover
