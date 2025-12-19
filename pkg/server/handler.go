@@ -20,9 +20,22 @@ type Handler struct {
 	db  *gorm.DB // 来自 targetDB 的只读 MySQL
 }
 
-// Pager 分页参数
-
-// GetArticles 获取文章列表 - 使用游标分页
+// GetArticles 获取文章列表
+// @Summary      获取文章列表
+// @Description  按栏目、站点、时间分页获取文章
+// @Tags         articles
+// @Produce      json
+// @Param        columnId  query  string  false  "栏目ID，逗号分隔"
+// @Param        siteId    query  string  false  "站点ID，逗号分隔"
+// @Param        page      query  int     false  "页码，从1开始"
+// @Param        pageSize  query  int     false  "每页大小"
+// @Param        title     query  string  false  "标题模糊搜索"
+// @Param        startTime query  string  false  "开始时间，格式: 2025-01-01"
+// @Param        endTime   query  string  false  "结束时间，格式: 2025-01-01"
+// @Param        articleId query  string  false  "文章ID"
+// @Param        fuzzyField query  string  false  "模糊搜索字段，逗号分隔"
+// @Success      200  {object}  util.Response
+// @Router       /api/v1/webplus/getArticles [get]
 func (h *Handler) GetArticles(c *gin.Context) {
 	columnIdStr := c.Query("columnId")
 	var siteIdStr string
