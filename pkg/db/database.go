@@ -68,7 +68,7 @@ func InitTargetDB(cfg *Config) error {
 		if cfg != nil && cfg.Debug {
 			gormTargetDB = gormTargetDB.Debug()
 		}
-		err := gormTargetDB.AutoMigrate(&models.ArticleStatic{}, &models.ArticleDynamic{}, &models.ArticleAttachment{})
+		err := gormTargetDB.AutoMigrate(&models.ArticleStatic{}, &models.ArticleDynamic{}, &models.ArticleAttachment{}, &models.TColumn{}, &models.TSite{})
 		if err != nil {
 			return
 		}

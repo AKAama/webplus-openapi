@@ -14,12 +14,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// Handler v1版本API处理器
-type Handler struct {
-	cfg Config
-	db  *gorm.DB // 来自 targetDB 的只读 MySQL
-}
-
 // GetArticles 获取文章列表
 // @Summary      获取文章列表
 // @Description  按栏目、站点、时间分页获取文章
@@ -36,18 +30,19 @@ type Handler struct {
 // @Param        fuzzyField query  string  false  "模糊搜索字段，逗号分隔"
 // @Success      200  {object}  util.Response
 // @Router       /api/v1/webplus/getArticles [get]
+// @Router       /api/v1/webplus/getArticles [post]
 func (h *Handler) GetArticles(c *gin.Context) {
-	columnIdStr := c.Query("columnId")
+	columnIdStr := util.GetParam(c, "columnId")
 	var siteIdStr string
 	//如果同时传columnId和siteId，则只看columnId
 	if columnIdStr == "" {
-		siteIdStr = c.Query("siteId")
+		siteIdStr = util.GetParam(c, "siteId")
 	}
-	articleIdStr := c.Query("articleId")
+	articleIdStr := util.GetParam(c, "articleId")
 
-	title := c.Query("title")
-	startTimeStr := c.Query("startTime")
-	endTimeStr := c.Query("endTime")
+	title := util.GetParam(c, "title")
+	startTimeStr := util.GetParam(c, "startTime")
+	endTimeStr := util.GetParam(c, "endTime")
 
 	loc, _ := time.LoadLocation("Asia/Shanghai") //统一为北京时间
 	timeFormats := []string{
@@ -97,11 +92,19 @@ func (h *Handler) GetArticles(c *gin.Context) {
 		endTime = &parsed
 	}
 
-	pageSize, _ := strconv.Atoi(c.DefaultQuery("pageSize", "20"))
+	pageSizeStr := util.GetParam(c, "pageSize")
+	if pageSizeStr == "" {
+		pageSizeStr = "20"
+	}
+	pageSize, _ := strconv.Atoi(pageSizeStr)
 	if pageSize < 1 || pageSize > 100 {
 		pageSize = 20
 	}
-	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageStr := util.GetParam(c, "page")
+	if pageStr == "" {
+		pageStr = "1"
+	}
+	page, _ := strconv.Atoi(pageStr)
 	if page < 1 {
 		page = 1
 	}
@@ -202,7 +205,7 @@ func (h *Handler) GetArticles(c *gin.Context) {
 	}
 
 	for _, field := range h.cfg.Search.FuzzyField {
-		keyword := c.Query(field) // 自动用字段名作为 query 参数名
+		keyword := util.GetParam(c, field) // 自动用字段名作为 query 参数名
 		if keyword != "" {
 			likeValue := "%" + strings.TrimSpace(keyword) + "%"
 			query = query.Where(fmt.Sprintf("%s LIKE ?", field), likeValue)
@@ -432,4 +435,229 @@ func injectArticleFields(target gin.H, fields models.ArticleFields) {
 	for key, value := range fields.ToMap() {
 		target[key] = value
 	}
+}
+
+// GetColumns 获取栏目列表
+// @Summary      获取栏目列表
+// @Description  按站点、父栏目等条件分页获取栏目
+// @Tags         columns
+// @Produce      json
+// @Param        siteId   query  string  false  "站点ID，逗号分隔"
+// @Param        parentId query  string  false  "父栏目ID"
+// @Param        page     query  int     false  "页码，从1开始"
+// @Param        pageSize query  int     false  "每页大小"
+// @Param        name     query  string  false  "栏目名称模糊搜索"
+// @Success      200  {object}  util.Response
+// @Router       /api/v1/webplus/getColumns [get]
+// @Router       /api/v1/webplus/getColumns [post]
+func (h *Handler) GetColumns(c *gin.Context) {
+	siteIdStr := util.GetParam(c, "siteId")
+	parentIdStr := util.GetParam(c, "parentId")
+	name := util.GetParam(c, "name")
+
+	pageSizeStr := util.GetParam(c, "pageSize")
+	if pageSizeStr == "" {
+		pageSizeStr = "20"
+	}
+	pageSize, _ := strconv.Atoi(pageSizeStr)
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	pageStr := util.GetParam(c, "page")
+	if pageStr == "" {
+		pageStr = "1"
+	}
+	page, _ := strconv.Atoi(pageStr)
+	if page < 1 {
+		page = 1
+	}
+
+	sourceDB := db.GetTargetDB()
+	if sourceDB == nil {
+		util.Err(c, fmt.Errorf("sourceDB 未初始化"))
+		return
+	}
+
+	// 构建查询
+	query := sourceDB.Table("T_COLUMN")
+
+	// 站点过滤
+	if siteIdStr != "" {
+		validSiteIds, _ := parseIDList(siteIdStr)
+		if len(validSiteIds) > 0 {
+			// 将 int64 转换为 string 进行查询（因为 TColumn.SiteId 是 string 类型）
+			siteIdStrs := make([]string, 0, len(validSiteIds))
+			for _, id := range validSiteIds {
+				siteIdStrs = append(siteIdStrs, strconv.FormatInt(id, 10))
+			}
+			query = query.Where("siteId IN ?", siteIdStrs)
+		}
+	}
+
+	// 父栏目过滤
+	if parentIdStr != "" {
+		query = query.Where("parentId = ?", parentIdStr)
+	}
+
+	// 名称模糊搜索
+	if name != "" {
+		like := "%" + name + "%"
+		query = query.Where("name LIKE ?", like)
+	}
+
+	// 统计总数
+	var total int64
+	if err := query.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+		util.Err(c, fmt.Errorf("统计栏目总数失败: %v", err))
+		return
+	}
+
+	// 分页
+	offset := (page - 1) * pageSize
+	query = query.Order("id ASC").Offset(offset).Limit(pageSize)
+
+	var columns []models.TColumn
+	if err := query.Find(&columns).Error; err != nil {
+		util.Err(c, fmt.Errorf("查询栏目列表失败: %v", err))
+		return
+	}
+	//处理栏目Url
+	for _, column := range columns {
+		if column.Link == "" {
+			column.Link = generateUrl(column)
+		}
+	}
+
+	// 是否还有下一页
+	hasNext := int64(page*pageSize) < total
+
+	// 转换为响应格式
+	list := make([]ColumnInfo, len(columns))
+	for i, col := range columns {
+		allPathIds := h.extractIdsFromPath(col.Path)
+		columnIdToName := make(map[int]string)
+		if len(allPathIds) > 0 {
+			var pathColumns []models.TColumn
+			if err := h.db.Table(models.TableNameTColumn).
+				Where("id IN ?", allPathIds).
+				Select("id, name").
+				Find(&pathColumns).Error; err == nil {
+				for _, pathCol := range pathColumns {
+					columnIdToName[pathCol.Id] = pathCol.Name
+				}
+			}
+		}
+		// 将数字 path 转换为中文 path
+		chinesePath := h.convertPathToChineseWithCache(col.Path, columnIdToName, &col, allPathIds)
+
+		list[i] = ColumnInfo{
+			ColumnId:       col.Id,
+			ColumnName:     col.Name,
+			ParentColumnId: col.ParentId,
+			ColumnUrl:      col.Link,
+			Path:           chinesePath,
+			Sort:           col.Sort,
+		}
+	}
+
+	response := GetColumnsResponse{
+		Found: len(columns) > 0,
+		Items: list,
+		Pagination: GetColumnsPagination{
+			Page:     page,
+			PageSize: pageSize,
+			HasNext:  hasNext,
+			Total:    total,
+		},
+	}
+
+	util.Ok(c, response)
+}
+
+// extractIdsFromPath 从 path 中提取所有 ID
+// 例如: /33/35/37/38/ -> [33, 35, 37, 38]
+func (h *Handler) extractIdsFromPath(path string) []int {
+	if path == "" {
+		return nil
+	}
+
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	ids := make([]int, 0, len(parts))
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		if id, err := strconv.Atoi(part); err == nil {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// convertPathToChineseWithCache 将数字路径转换为中文路径（使用缓存）
+// 例如: /33/35/37/38/ -> /系统站点/栏目35/栏目37/栏目38/
+// 如果 path 是单独的 /，返回 /系统站点
+// idToName: 栏目 ID -> Name 的映射
+// siteIdToName: 站点 ID -> Name 的映射
+// col: 栏目信息，用于处理 path 为 / 的情况
+func (h *Handler) convertPathToChineseWithCache(path string, columnIdToName map[int]string, col *models.TColumn, ids []int) string {
+	if path == "" {
+		return ""
+	}
+
+	// 处理单独的 / 的情况，返回 /系统站点
+	if path == "/" || col.Id == 1 || len(ids) == 0 {
+		return "/系统站点"
+	}
+
+	// 如果提取不到 ID，返回默认格式
+	if len(ids) == 0 {
+		return "/系统站点" + "/" + col.Name
+	}
+
+	var chineseParts []string
+	for i := 0; i < len(ids); i++ {
+		id := ids[i]
+		if name, exists := columnIdToName[id]; exists {
+			chineseParts = append(chineseParts, name)
+		}
+	}
+
+	// 拼接成路径格式: /系统站点/栏目1/栏目2/当前栏目名称
+	var result string
+	if len(chineseParts) > 0 {
+		result = "/系统站点/" + strings.Join(chineseParts, "/") + "/" + col.Name
+	} else {
+		result = "/系统站点/" + col.Name
+	}
+	return result
+}
+
+func generateUrl(column models.TColumn) string {
+	var url string
+	var siteDomain string
+	//获取站点域名
+	targetDB := db.GetTargetDB()
+	if targetDB == nil {
+		return ""
+	}
+	var site models.TSite
+	if err := targetDB.Table("T_SITE").Where("ID = ?", column.SiteId).First(&site).Error; err != nil {
+		return ""
+	}
+	siteDomain = site.DomainName
+	if siteDomain != "" {
+		if strings.HasSuffix(siteDomain, "/") {
+			url = siteDomain + column.Path + "/list.htm"
+		} else {
+			url = siteDomain + "/" + column.Path + "/list.htm"
+		}
+		// 追加 /list.htm
+		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+			url = "http://" + url
+		}
+		return url
+	}
+	url = "http://" + siteDomain + column.Path + "/list.htm"
+	return url
 }

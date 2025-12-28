@@ -5,6 +5,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/gin-gonic/gin"
 	"github.com/pkg/errors"
 	"github.com/spf13/cast"
 )
@@ -45,4 +46,12 @@ func ParseArticleTime(val string) (time.Time, bool) {
 		}
 	}
 	return time.Time{}, false
+}
+
+// GetParam 从 Query 或 PostForm 获取参数（优先 Query）
+func GetParam(c *gin.Context, key string) string {
+	if val := c.Query(key); val != "" {
+		return val
+	}
+	return c.PostForm(key)
 }
