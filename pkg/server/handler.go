@@ -606,7 +606,7 @@ func (h *Handler) convertPathToChineseWithCache(path string, columnIdToName map[
 	}
 
 	// 处理单独的 / 的情况，返回 /系统站点
-	if path == "/" || col.Id == 1 || len(ids) == 0 {
+	if col.Id == 1 {
 		return "/系统站点"
 	}
 
