@@ -7,6 +7,7 @@ type TColumn struct {
 	Name       string `json:"name" gorm:"column:name"`         // 栏目名称
 	SiteId     int    `json:"siteId" gorm:"column:siteId"`     // 站点ID
 	ParentId   int    `json:"parentId" gorm:"column:parentId"` // 父栏目ID
+	UrlName    string `json:"urlName" gorm:"column:urlName"`   //虚拟目录
 	Link       string `json:"link" gorm:"column:link"`
 	Path       string `json:"path" gorm:"column:path"`             // 栏目路径
 	Sort       int    `json:"sort" gorm:"column:sort"`             // 栏目排序

@@ -522,9 +522,9 @@ func (h *Handler) GetColumns(c *gin.Context) {
 		return
 	}
 	//处理栏目Url
-	for _, column := range columns {
-		if column.Link == "" {
-			column.Link = generateUrl(column)
+	for i := range columns {
+		if columns[i].Link == "" {
+			columns[i].Link = generateUrl(columns[i])
 		}
 	}
 
@@ -646,18 +646,18 @@ func generateUrl(column models.TColumn) string {
 		return ""
 	}
 	siteDomain = site.DomainName
-	if siteDomain != "" {
-		if strings.HasSuffix(siteDomain, "/") {
-			url = siteDomain + column.Path + "/list.htm"
-		} else {
-			url = siteDomain + "/" + column.Path + "/list.htm"
-		}
-		// 追加 /list.htm
-		if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-			url = "http://" + url
-		}
-		return url
+	if site.DomainName != "" {
+
 	}
-	url = "http://" + siteDomain + column.Path + "/list.htm"
+	if strings.HasSuffix(siteDomain, "/") {
+		url = siteDomain + column.Path + "/list.htm"
+	} else {
+		url = siteDomain + "/" + column.UrlName + "/list.htm"
+	}
+	// 追加 /list.htm
+	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
+		url = "http://" + url
+	}
 	return url
+
 }
