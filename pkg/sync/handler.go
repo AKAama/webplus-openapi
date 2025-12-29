@@ -72,7 +72,7 @@ func (s *TableSyncService) Sync() error {
 
 	// 1. 从 SourceDB 读取所有数据
 	// 创建 []*Entity 类型的切片
-	sliceType := reflect.SliceOf(reflect.PtrTo(s.entityType))
+	sliceType := reflect.SliceOf(reflect.PointerTo(s.entityType))
 	sourcePtr := reflect.New(sliceType)
 	sourceSlice := sourcePtr.Elem()
 
@@ -308,123 +308,6 @@ func (s *ColumnSyncService) SyncColumns() error {
 	return s.Sync()
 }
 
-// Sync 重写同步方法，添加 parentId 的特殊处理
-func (s *ColumnSyncService) Sync() error {
-	s.mu.Lock()
-	if s.running {
-		s.mu.Unlock()
-		return fmt.Errorf("同步任务正在运行中，请稍后再试")
-	}
-	s.running = true
-	s.mu.Unlock()
-
-	defer func() {
-		s.mu.Lock()
-		s.running = false
-		s.mu.Unlock()
-	}()
-
-	if s.sourceDB == nil {
-		return fmt.Errorf("SourceDB 未初始化")
-	}
-	if s.targetDB == nil {
-		return fmt.Errorf("targetDB 未初始化")
-	}
-
-	zap.S().Infof("开始同步 %s 表...", s.serviceName)
-	startTime := time.Now()
-
-	// 1. 从 SourceDB 读取所有栏目数据
-	var sourceColumns []models.TColumn
-	if err := s.sourceDB.Table(s.tableName).Find(&sourceColumns).Error; err != nil {
-		return fmt.Errorf("从 SourceDB 读取数据失败: %w", err)
-	}
-
-	zap.S().Infof("从 SourceDB 读取到 %d 条数据", len(sourceColumns))
-
-	// 2. 处理 parentId：如果原表是 null（在 Go 中表现为 0），则改为 1
-	for i := range sourceColumns {
-		if sourceColumns[i].ParentId == 0 {
-			sourceColumns[i].ParentId = 1
-		}
-	}
-
-	// 3. 从 targetDB 读取现有数据
-	var targetColumns []models.TColumn
-	if err := s.targetDB.Table(s.tableName).Find(&targetColumns).Error; err != nil {
-		zap.S().Warnf("从 targetDB 读取数据失败（可能表不存在）: %v", err)
-		targetColumns = []models.TColumn{}
-	}
-
-	// 4. 构建现有数据的映射（以 Id 为 key）
-	targetMap := make(map[int]*models.TColumn)
-	for i := range targetColumns {
-		targetMap[targetColumns[i].Id] = &targetColumns[i]
-	}
-
-	// 5. 统计变更
-	var added, updated, deleted int
-
-	// 6. 开始事务
-	tx := s.targetDB.Begin()
-	if tx.Error != nil {
-		return fmt.Errorf("开启事务失败: %w", tx.Error)
-	}
-	defer func() {
-		if r := recover(); r != nil {
-			tx.Rollback()
-			zap.S().Errorf("同步过程发生 panic: %v", r)
-		}
-	}()
-
-	// 7. 处理新增和更新
-	for i := range sourceColumns {
-		sourceCol := &sourceColumns[i]
-		targetCol, exists := targetMap[sourceCol.Id]
-
-		if !exists {
-			// 新增
-			if err := tx.Table(s.tableName).Create(sourceCol).Error; err != nil {
-				tx.Rollback()
-				return fmt.Errorf("插入数据 %d 失败: %w", sourceCol.Id, err)
-			}
-			added++
-		} else {
-			// 检查是否有变化
-			if s.hasChanged != nil && s.hasChanged(targetCol, sourceCol) {
-				// 更新 - 使用 Updates 方法
-				if err := tx.Table(s.tableName).Where("Id = ? OR id = ?", sourceCol.Id, sourceCol.Id).Updates(sourceCol).Error; err != nil {
-					tx.Rollback()
-					return fmt.Errorf("更新数据 %d 失败: %w", sourceCol.Id, err)
-				}
-				updated++
-			}
-			// 标记为已处理
-			delete(targetMap, sourceCol.Id)
-		}
-	}
-
-	// 8. 处理删除（targetDB 中存在但 SourceDB 中不存在的）
-	for id := range targetMap {
-		if err := tx.Table(s.tableName).Where("Id = ? OR id = ?", id, id).Delete(&models.TColumn{}).Error; err != nil {
-			tx.Rollback()
-			return fmt.Errorf("删除数据 %d 失败: %w", id, err)
-		}
-		deleted++
-	}
-
-	// 9. 提交事务
-	if err := tx.Commit().Error; err != nil {
-		return fmt.Errorf("提交事务失败: %w", err)
-	}
-
-	duration := time.Since(startTime)
-	zap.S().Infof("%s 表同步完成 - 新增: %d, 更新: %d, 删除: %d, 耗时: %v",
-		s.serviceName, added, updated, deleted, duration)
-
-	return nil
-}
-
 // StartDailySync 启动每日定时同步（保持向后兼容）
 func (s *ColumnSyncService) StartDailySync(ctx context.Context) error {
 	return s.TableSyncService.StartDailySync(ctx)
@@ -446,7 +329,10 @@ func NewSiteSyncServiceWithDB(sourceDB, targetDB *gorm.DB) *SiteSyncService {
 		oldSite := old.(*models.TSite)
 		newSite := new.(*models.TSite)
 		return oldSite.Name != newSite.Name ||
-			oldSite.DomainName != newSite.DomainName
+			oldSite.DomainName != newSite.DomainName ||
+			oldSite.ShortName != newSite.ShortName ||
+			oldSite.Logo != newSite.Logo ||
+			oldSite.FilePath != newSite.FilePath
 	}
 
 	service := NewTableSyncService(
@@ -479,4 +365,29 @@ func (s *SiteSyncService) StartCronSync(ctx context.Context, cfg *Config) error 
 // SyncNow 立即执行一次同步（保持向后兼容）
 func (s *SiteSyncService) SyncNow() error {
 	return s.TableSyncService.SyncNow()
+}
+
+type PubSiteSyncService struct {
+	*TableSyncService
+}
+
+func NewPublishSiteSyncServiceWithDB(sourceDB, targetDB *gorm.DB) *PubSiteSyncService {
+	hasChanged := func(old, new interface{}) bool {
+		oldPubSite := old.(*models.TPublishSite)
+		newPubSite := new.(*models.TPublishSite)
+		return oldPubSite.PublishServerId != newPubSite.PublishServerId ||
+			oldPubSite.Deleted != newPubSite.Deleted ||
+			oldPubSite.EnableRedirect != newPubSite.EnableRedirect
+	}
+
+	service := NewTableSyncService(
+		sourceDB,
+		targetDB,
+		models.TableNameTPubSite,
+		reflect.TypeOf(models.TPublishSite{}),
+		hasChanged,
+		"T_PUBLISHSITE",
+	)
+
+	return &PubSiteSyncService{TableSyncService: service}
 }

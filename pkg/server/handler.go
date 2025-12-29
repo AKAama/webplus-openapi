@@ -2,6 +2,8 @@ package server
 
 import (
 	"fmt"
+	"path"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -437,6 +439,157 @@ func injectArticleFields(target gin.H, fields models.ArticleFields) {
 	}
 }
 
+// GetSites 获取站点列表
+// @Summary      获取站点列表
+// @Description  按站点ID、名称等条件分页获取站点
+// @Tags         sites
+// @Produce      json
+// @Param        siteId   query  string  false  "站点ID，逗号分隔"
+// @Param        name     query  string  false  "站点名称模糊搜索"
+// @Param        page     query  int     false  "页码，从1开始"
+// @Param        pageSize query  int     false  "每页大小"
+// @Success      200  {object}  util.Response{data=GetSitesResponse}
+// @Router       /api/v1/webplus/getSites [get]
+// @Router       /api/v1/webplus/getSites [post]
+func (h *Handler) GetSites(c *gin.Context) {
+	siteIdStr := util.GetParam(c, "siteId")
+	name := util.GetParam(c, "name")
+
+	pageSizeStr := util.GetParam(c, "pageSize")
+	if pageSizeStr == "" {
+		pageSizeStr = "20"
+	}
+	pageSize, _ := strconv.Atoi(pageSizeStr)
+	if pageSize < 1 || pageSize > 100 {
+		pageSize = 20
+	}
+	pageStr := util.GetParam(c, "page")
+	if pageStr == "" {
+		pageStr = "1"
+	}
+	page, _ := strconv.Atoi(pageStr)
+	if page < 1 {
+		page = 1
+	}
+
+	targetDB := db.GetTargetDB()
+	if targetDB == nil {
+		util.Err(c, fmt.Errorf("targetDB 未初始化"))
+		return
+	}
+
+	// 构建查询
+	query := targetDB.Table(models.TableNameTSite)
+
+	// 站点ID过滤
+	if siteIdStr != "" {
+		validSiteIds, _ := parseIDList(siteIdStr)
+		if len(validSiteIds) > 0 {
+			query = query.Where("ID IN ?", validSiteIds)
+		}
+	}
+
+	// 名称模糊搜索
+	if name != "" {
+		like := "%" + name + "%"
+		query = query.Where("NAME LIKE ?", like)
+	}
+
+	// 统计总数
+	var total int64
+	if err := query.Session(&gorm.Session{}).Count(&total).Error; err != nil {
+		util.Err(c, fmt.Errorf("统计站点总数失败: %v", err))
+		return
+	}
+
+	// 分页
+	offset := (page - 1) * pageSize
+	query = query.Order("ID ASC").Offset(offset).Limit(pageSize)
+
+	var sites []models.TSite
+	if err := query.Find(&sites).Error; err != nil {
+		util.Err(c, fmt.Errorf("查询站点列表失败: %v", err))
+		return
+	}
+
+	// 是否还有下一页
+	hasNext := int64(page*pageSize) < total
+
+	// 批量查询 T_PUBLISHSITE 表，获取已发布的站点ID（deleted = 0）
+	publishedSiteIds := make(map[int]bool)
+	if len(sites) > 0 {
+		// 收集所有站点ID
+		siteIds := make([]int, 0, len(sites))
+		for _, s := range sites {
+			siteIds = append(siteIds, s.Id)
+		}
+
+		// 查询 T_PUBLISHSITE 表，找出 siteId 存在且 deleted = 0 的记录
+		var publishSites []models.TPublishSite
+		if err := targetDB.Table(models.TableNameTPubSite).
+			Where("siteId IN ? AND deleted = ?", siteIds, 0).
+			Select("siteId").
+			Find(&publishSites).Error; err == nil {
+			// 构建已发布站点ID的映射
+			for _, ps := range publishSites {
+				publishedSiteIds[ps.SiteId] = true
+			}
+		}
+	}
+
+	// 转换为响应格式
+	list := make([]SiteInfo, len(sites))
+	for i, s := range sites {
+		// 处理域名，兼容逗号分隔的多个域名
+		siteUrl := ""
+		if s.DomainName != "" {
+			re := regexp.MustCompile(`[,，]+`)
+			parts := re.Split(s.DomainName, -1)
+			for _, part := range parts {
+				trimmed := strings.TrimSpace(part)
+				if trimmed != "" {
+					siteUrl = trimmed
+					break
+				}
+			}
+		}
+
+		logoURL := ""
+		if s.Logo != "" && siteUrl != "" {
+			logoPath := path.Join("/_upload", s.FilePath, s.Logo)
+			logoURL = "http://" + siteUrl + logoPath
+		}
+
+		// 根据 T_PUBLISHSITE 表判断是否已发布
+		status := 0
+		if publishedSiteIds[s.Id] {
+			status = 1
+		}
+
+		list[i] = SiteInfo{
+			SiteId:    s.Id,
+			SiteName:  s.Name,
+			Status:    status, // 根据 T_PUBLISHSITE 表判断：存在且 deleted = 0 则为 1，否则为 0
+			SiteUrl:   siteUrl,
+			ShortName: s.ShortName,
+			Logo:      logoURL,
+		}
+	}
+
+	response := GetSitesResponse{
+		Found: len(sites) > 0,
+		Items: list,
+		Pagination: GetColumnsPagination{
+			Page:     page,
+			PageSize: pageSize,
+			HasNext:  hasNext,
+			Total:    total,
+		},
+	}
+
+	util.Ok(c, response)
+}
+
 // GetColumns 获取栏目列表
 // @Summary      获取栏目列表
 // @Description  按站点、父栏目等条件分页获取栏目
@@ -447,7 +600,7 @@ func injectArticleFields(target gin.H, fields models.ArticleFields) {
 // @Param        page     query  int     false  "页码，从1开始"
 // @Param        pageSize query  int     false  "每页大小"
 // @Param        name     query  string  false  "栏目名称模糊搜索"
-// @Success      200  {object}  util.Response
+// @Success      200  {object}  util.Response{data=GetColumnsResponse}
 // @Router       /api/v1/webplus/getColumns [get]
 // @Router       /api/v1/webplus/getColumns [post]
 func (h *Handler) GetColumns(c *gin.Context) {
@@ -580,7 +733,6 @@ func (h *Handler) GetColumns(c *gin.Context) {
 }
 
 // extractIdsFromPath 从 path 中提取所有 ID
-// 例如: /33/35/37/38/ -> [33, 35, 37, 38]
 func (h *Handler) extractIdsFromPath(path string) []int {
 	if path == "" {
 		return nil
@@ -600,11 +752,6 @@ func (h *Handler) extractIdsFromPath(path string) []int {
 }
 
 // convertPathToChineseWithCache 将数字路径转换为中文路径（使用缓存）
-// 例如: /33/35/37/38/ -> /系统站点/栏目35/栏目37/栏目38/
-// 如果 path 是单独的 /，返回 /系统站点
-// idToName: 栏目 ID -> Name 的映射
-// siteIdToName: 站点 ID -> Name 的映射
-// col: 栏目信息，用于处理 path 为 / 的情况
 func (h *Handler) convertPathToChineseWithCache(path string, columnIdToName map[int]string, col *models.TColumn, ids []int) string {
 	if path == "" {
 		return ""

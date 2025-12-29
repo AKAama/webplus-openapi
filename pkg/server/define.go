@@ -19,6 +19,15 @@ type ColumnInfo struct {
 	Status         int    `json:"status"`
 }
 
+type SiteInfo struct {
+	SiteId    int    `json:"siteId"`
+	SiteName  string `json:"siteName"`
+	Status    int    `json:"status"`
+	SiteUrl   string `json:"siteUrl"`
+	ShortName string `json:"shortName"`
+	Logo      string `json:"logo"`
+}
+
 // GetColumnsResponse GetColumns API 响应结构体
 type GetColumnsResponse struct {
 	Found      bool                 `json:"found"`      // 是否找到数据
@@ -32,4 +41,11 @@ type GetColumnsPagination struct {
 	PageSize int   `json:"pageSize"` // 每页大小
 	HasNext  bool  `json:"hasNext"`  // 是否有下一页
 	Total    int64 `json:"total"`    // 总记录数
+}
+
+// GetSitesResponse GetSites API 响应结构体
+type GetSitesResponse struct {
+	Found      bool                 `json:"found"`      // 是否找到数据
+	Items      []SiteInfo           `json:"items"`      // 站点列表
+	Pagination GetColumnsPagination `json:"pagination"` // 分页信息（复用栏目分页结构）
 }

@@ -9,6 +9,7 @@ import (
 type APIHandler interface {
 	GetArticles(c *gin.Context)
 	GetColumns(c *gin.Context)
+	GetSites(c *gin.Context)
 }
 
 // InitRouter 初始化路由配置
@@ -27,6 +28,11 @@ func InitRouter(engine *gin.Engine, handler APIHandler) *gin.RouterGroup {
 			webplus.GET("/getColumns", handler.GetColumns)
 			webplus.POST("/getColumns", handler.GetColumns)
 			zap.S().Info("路由注册成功: GET/POST /api/v1/webplus/getColumns")
+
+			// getSites 支持 GET 和 POST
+			webplus.GET("/getSites", handler.GetSites)
+			webplus.POST("/getSites", handler.GetSites)
+			zap.S().Info("路由注册成功: GET/POST /api/v1/webplus/getSites")
 		}
 	} else {
 		zap.S().Warn("Handler为nil，路由未注册")

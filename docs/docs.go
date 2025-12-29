@@ -60,6 +60,110 @@ const docTemplate = `{
                     }
                 }
             }
+        },
+        "/api/v1/webplus/getColumns": {
+            "get": {
+                "description": "按站点、父栏目等条件分页获取栏目",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "columns"
+                ],
+                "summary": "获取栏目列表",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "站点ID，逗号分隔",
+                        "name": "siteId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "父栏目ID",
+                        "name": "parentId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "栏目名称模糊搜索",
+                        "name": "name",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "展示类型，tree 时只返回顶级导航栏目",
+                        "name": "showType",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码，从1开始",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页大小",
+                        "name": "pageSize",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/util.Response"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/v1/webplus/getSites": {
+            "get": {
+                "description": "按站点ID、名称等条件分页获取站点",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "sites"
+                ],
+                "summary": "获取站点列表",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "站点ID，逗号分隔",
+                        "name": "siteId",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "站点名称模糊搜索",
+                        "name": "name",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "页码，从1开始",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "每页大小",
+                        "name": "pageSize",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/util.Response"
+                        }
+                    }
+                }
+            }
         }
     },
     "definitions": {

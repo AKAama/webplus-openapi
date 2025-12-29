@@ -85,6 +85,7 @@ func runSyncServer(cfg *sync.Config) error {
 	// 创建同步服务
 	columnSyncService := sync.NewColumnSyncServiceWithDB(sourceDB, targetDB)
 	siteSyncService := sync.NewSiteSyncServiceWithDB(sourceDB, targetDB)
+	publishSiteSyncService := sync.NewPublishSiteSyncServiceWithDB(sourceDB, targetDB)
 
 	// 设置优雅关闭
 	ctx, cancel := context.WithCancel(context.Background())
@@ -108,6 +109,12 @@ func runSyncServer(cfg *sync.Config) error {
 		} else {
 			zap.S().Info("启动时同步 T_SITE 完成")
 		}
+		// 同步 T_PUBLISHSITE
+		if err := publishSiteSyncService.SyncNow(); err != nil {
+			zap.S().Errorf("启动时同步 T_PUBLISHSITE 失败: %v", err)
+		} else {
+			zap.S().Info("启动时同步 T_PUBLISHSITE 完成")
+		}
 	}
 
 	// 启动定时同步
@@ -122,6 +129,10 @@ func runSyncServer(cfg *sync.Config) error {
 		if err := siteSyncService.StartCronSync(ctx, cfg); err != nil {
 			return fmt.Errorf("启动 T_SITE cron 定时同步失败: %w", err)
 		}
+		// 启动 T_PUBLISHSITE 同步
+		if err := publishSiteSyncService.StartCronSync(ctx, cfg); err != nil {
+			return fmt.Errorf("启动 T_PUBLISHSITE cron 定时同步失败: %w", err)
+		}
 	} else {
 		// 默认每天12点执行
 		zap.S().Info("启动每日定时同步（每天12点执行）")
@@ -132,6 +143,10 @@ func runSyncServer(cfg *sync.Config) error {
 		// 启动 T_SITE 同步
 		if err := siteSyncService.StartDailySync(ctx); err != nil {
 			return fmt.Errorf("启动 T_SITE 每日定时同步失败: %w", err)
+		}
+		// 启动 T_PUBLISHSITE 同步
+		if err := publishSiteSyncService.StartDailySync(ctx); err != nil {
+			return fmt.Errorf("启动 T_PUBLISHSITE 每日定时同步失败: %w", err)
 		}
 	}
 
