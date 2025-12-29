@@ -454,6 +454,7 @@ func (h *Handler) GetColumns(c *gin.Context) {
 	siteIdStr := util.GetParam(c, "siteId")
 	parentIdStr := util.GetParam(c, "parentId")
 	name := util.GetParam(c, "name")
+	showType := util.GetParam(c, "showType")
 
 	pageSizeStr := util.GetParam(c, "pageSize")
 	if pageSizeStr == "" {
@@ -505,6 +506,10 @@ func (h *Handler) GetColumns(c *gin.Context) {
 		query = query.Where("name LIKE ?", like)
 	}
 
+	if showType == "tree" {
+		query = query.Where("parentId = 0 AND id != 1 ")
+	}
+
 	// 统计总数
 	var total int64
 	if err := query.Session(&gorm.Session{}).Count(&total).Error; err != nil {
@@ -521,12 +526,6 @@ func (h *Handler) GetColumns(c *gin.Context) {
 		util.Err(c, fmt.Errorf("查询栏目列表失败: %v", err))
 		return
 	}
-	//处理栏目Url
-	for i := range columns {
-		if columns[i].Link == "" {
-			columns[i].Link = generateUrl(columns[i])
-		}
-	}
 
 	// 是否还有下一页
 	hasNext := int64(page*pageSize) < total
@@ -534,6 +533,11 @@ func (h *Handler) GetColumns(c *gin.Context) {
 	// 转换为响应格式
 	list := make([]ColumnInfo, len(columns))
 	for i, col := range columns {
+		//处理URL
+		if columns[i].Link == "" {
+			columns[i].Link = generateUrl(columns[i])
+		}
+		//处理全路径
 		allPathIds := h.extractIdsFromPath(col.Path)
 		columnIdToName := make(map[int]string)
 		if len(allPathIds) > 0 {
@@ -557,6 +561,7 @@ func (h *Handler) GetColumns(c *gin.Context) {
 			ColumnUrl:      col.Link,
 			Path:           chinesePath,
 			Sort:           col.Sort,
+			Status:         col.Navigation, //暂时按哈工大的需求来。如果是导航栏目就是显示
 		}
 	}
 
@@ -635,26 +640,31 @@ func (h *Handler) convertPathToChineseWithCache(path string, columnIdToName map[
 
 func generateUrl(column models.TColumn) string {
 	var url string
-	var siteDomain string
-	//获取站点域名
 	targetDB := db.GetTargetDB()
 	if targetDB == nil {
 		return ""
 	}
 	var site models.TSite
-	if err := targetDB.Table("T_SITE").Where("ID = ?", column.SiteId).First(&site).Error; err != nil {
+	if err := targetDB.Table(models.TableNameTSite).Where("ID = ?", column.SiteId).First(&site).Error; err != nil {
 		return ""
 	}
-	siteDomain = site.DomainName
-	if site.DomainName != "" {
+	if site.DomainName == "" {
+		return ""
+	}
+	parts := strings.Split(site.DomainName, ",")
+	var firstDomain string
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			firstDomain = trimmed
+			break
+		}
+	}
+	if firstDomain == "" {
+		return ""
+	}
 
-	}
-	if strings.HasSuffix(siteDomain, "/") {
-		url = siteDomain + column.Path + "/list.htm"
-	} else {
-		url = siteDomain + "/" + column.UrlName + "/list.htm"
-	}
-	// 追加 /list.htm
+	url = firstDomain + "/" + column.UrlName + "/list.htm"
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		url = "http://" + url
 	}

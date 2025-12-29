@@ -16,6 +16,7 @@ type ColumnInfo struct {
 	ColumnUrl      string `json:"columnUrl"`      // 栏目链接
 	Path           string `json:"path"`           // 栏目路径
 	Sort           int    `json:"sort"`           // 栏目排序
+	Status         int    `json:"status"`
 }
 
 // GetColumnsResponse GetColumns API 响应结构体
