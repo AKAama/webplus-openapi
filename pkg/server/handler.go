@@ -515,8 +515,10 @@ func (h *Handler) GetSites(c *gin.Context) {
 	// 是否还有下一页
 	hasNext := int64(page*pageSize) < total
 
-	// 批量查询 T_PUBLISHSITE 表，获取已发布的站点ID（deleted = 0）
+	// 批量查询 T_PUBLISHSITE 表，获取已发布的站点ID（deleted = 0）和完整的发布记录
 	publishedSiteIds := make(map[int]bool)
+	siteToPublishSiteMap := make(map[int]*models.TPublishSite)     // siteId -> TPublishSite（当前站点的发布记录）
+	publishSiteIdToRecordMap := make(map[int]*models.TPublishSite) // publishSiteId -> TPublishSite（所有发布记录，用于查找父记录）
 	if len(sites) > 0 {
 		// 收集所有站点ID
 		siteIds := make([]int, 0, len(sites))
@@ -524,15 +526,72 @@ func (h *Handler) GetSites(c *gin.Context) {
 			siteIds = append(siteIds, s.Id)
 		}
 
-		// 查询 T_PUBLISHSITE 表，找出 siteId 存在且 deleted = 0 的记录
+		// 查询 T_PUBLISHSITE 表，找出 siteId 存在且 deleted = 0 的记录，获取完整信息
 		var publishSites []models.TPublishSite
 		if err := targetDB.Table(models.TableNameTPubSite).
 			Where("siteId IN ? AND deleted = ?", siteIds, 0).
-			Select("siteId").
 			Find(&publishSites).Error; err == nil {
-			// 构建已发布站点ID的映射
-			for _, ps := range publishSites {
+			// 构建映射
+			for i := range publishSites {
+				ps := &publishSites[i]
 				publishedSiteIds[ps.SiteId] = true
+				siteToPublishSiteMap[ps.SiteId] = ps
+				publishSiteIdToRecordMap[ps.Id] = ps
+			}
+		}
+
+		// 收集所有需要的 parentId（用于查找父发布记录）
+		parentPublishSiteIds := make([]int, 0)
+		parentIdSet := make(map[int]bool)
+		for _, ps := range publishSites {
+			if ps.ParentId > 0 && !parentIdSet[ps.ParentId] {
+				parentPublishSiteIds = append(parentPublishSiteIds, ps.ParentId)
+				parentIdSet[ps.ParentId] = true
+			}
+		}
+
+		// 查询父发布记录（通过 parentId 找到父站点的发布记录）
+		if len(parentPublishSiteIds) > 0 {
+			var parentPublishSites []models.TPublishSite
+			if err := targetDB.Table(models.TableNameTPubSite).
+				Where("id IN ? AND deleted = ?", parentPublishSiteIds, 0).
+				Find(&parentPublishSites).Error; err == nil {
+				for i := range parentPublishSites {
+					pps := &parentPublishSites[i]
+					publishSiteIdToRecordMap[pps.Id] = pps
+				}
+			}
+		}
+	}
+
+	// 批量查询父站点信息（用于没有 domainName 的站点）
+	parentSiteMap := make(map[int]models.TSite) // siteId -> TSite
+	if len(siteToPublishSiteMap) > 0 {
+		// 收集所有需要的父站点 siteId
+		parentSiteIds := make([]int, 0)
+		parentSiteIdSet := make(map[int]bool)
+		for _, ps := range siteToPublishSiteMap {
+			if ps.ParentId > 0 {
+				// 通过 parentId 找到父发布记录
+				if parentPublishSite, exists := publishSiteIdToRecordMap[ps.ParentId]; exists {
+					parentSiteId := parentPublishSite.SiteId
+					if parentSiteId > 0 && !parentSiteIdSet[parentSiteId] {
+						parentSiteIds = append(parentSiteIds, parentSiteId)
+						parentSiteIdSet[parentSiteId] = true
+					}
+				}
+			}
+		}
+
+		// 批量查询父站点
+		if len(parentSiteIds) > 0 {
+			var parentSites []models.TSite
+			if err := targetDB.Table(models.TableNameTSite).
+				Where("ID IN ?", parentSiteIds).
+				Find(&parentSites).Error; err == nil {
+				for _, ps := range parentSites {
+					parentSiteMap[ps.Id] = ps
+				}
 			}
 		}
 	}
@@ -540,16 +599,58 @@ func (h *Handler) GetSites(c *gin.Context) {
 	// 转换为响应格式
 	list := make([]SiteInfo, len(sites))
 	for i, s := range sites {
-		// 处理域名，兼容逗号分隔的多个域名
+		// 根据 T_PUBLISHSITE 表判断是否已发布
+		status := 0
+		if publishedSiteIds[s.Id] {
+			status = 1
+		}
+
+		// 处理域名：已发布的站点必须有 URL
 		siteUrl := ""
-		if s.DomainName != "" {
-			re := regexp.MustCompile(`[,，]+`)
-			parts := re.Split(s.DomainName, -1)
-			for _, part := range parts {
-				trimmed := strings.TrimSpace(part)
-				if trimmed != "" {
-					siteUrl = trimmed
-					break
+		if status == 1 {
+			// 情况1：站点有自己的 domainName
+			if s.DomainName != "" {
+				re := regexp.MustCompile(`[,，]+`)
+				parts := re.Split(s.DomainName, -1)
+				for _, part := range parts {
+					trimmed := strings.TrimSpace(part)
+					if trimmed != "" {
+						siteUrl = trimmed
+						break
+					}
+				}
+			} else {
+				// 情况2：通过 T_PUBLISHSITE 的 parentId 找到父站点的 domainName + 自己的 DummyName
+				if currentPublishSite, hasPublishSite := siteToPublishSiteMap[s.Id]; hasPublishSite {
+					if currentPublishSite.ParentId > 0 {
+						// 通过 parentId 找到父发布记录
+						if parentPublishSite, exists := publishSiteIdToRecordMap[currentPublishSite.ParentId]; exists {
+							// 获取父发布记录的 siteId
+							parentSiteId := parentPublishSite.SiteId
+							// 查询父站点的 domainName
+							if parentSite, exists := parentSiteMap[parentSiteId]; exists {
+								// 获取父站点的第一个域名
+								if parentSite.DomainName != "" {
+									re := regexp.MustCompile(`[,，]+`)
+									parts := re.Split(parentSite.DomainName, -1)
+									var parentDomain string
+									for _, part := range parts {
+										trimmed := strings.TrimSpace(part)
+										if trimmed != "" {
+											parentDomain = trimmed
+											break
+										}
+									}
+									// 拼接父站点域名 + 自己的 DummyName
+									if parentDomain != "" && s.DummyName != "" {
+										siteUrl = parentDomain + "/" + s.DummyName
+									} else if parentDomain != "" {
+										siteUrl = parentDomain
+									}
+								}
+							}
+						}
+					}
 				}
 			}
 		}
@@ -558,12 +659,6 @@ func (h *Handler) GetSites(c *gin.Context) {
 		if s.Logo != "" && siteUrl != "" {
 			logoPath := path.Join("/_upload", s.FilePath, s.Logo)
 			logoURL = "http://" + siteUrl + logoPath
-		}
-
-		// 根据 T_PUBLISHSITE 表判断是否已发布
-		status := 0
-		if publishedSiteIds[s.Id] {
-			status = 1
 		}
 
 		list[i] = SiteInfo{
