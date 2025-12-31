@@ -40,6 +40,7 @@ const (
 	OperateArtDelete    = "2" //文章删除
 	OperateColArtDelete = "7"
 	OperateColArtCreate = "8"
+	OperateArtVisit     = "article.visitCount.change"
 )
 
 var once sync.Once
@@ -190,13 +191,16 @@ func (w *Manager) handleOneMsg(msg jetstream.Msg) error {
 		err = deleteColumnArtsByArtId(&article)
 	case OperateColArtCreate:
 		err = updateColumnArtsByArtId(&article)
+	case OperateArtVisit:
+		err = updateVisitCountByArtId(&article)
+
 	}
 	return err
 }
 
 // 处理文章更新
 func (w *Manager) handleArticleUpdate(article *Article) error {
-	zap.S().Debugf("收到文章更新事件--> %s", article.ArticleId)
+	zap.S().Debugf("收到文章更新事件--> 文章id是%s", article.ArticleId)
 	artInfo := w.QueryArticleById(article)
 	if artInfo == nil {
 		zap.S().Debugf("站群不存在这条数据，文章id是=%s", article.ArticleId)
@@ -607,6 +611,8 @@ func getOpearteName(operate string) string {
 		operateName = "栏目文章删除"
 	case OperateColArtCreate:
 		operateName = "栏目文章新增"
+	case OperateArtVisit:
+		operateName = "访问量变化"
 	default:
 		operateName = "未知操作"
 	}
@@ -622,4 +628,87 @@ func buildArticleFieldSelect(alias string) string {
 		}
 	}
 	return builder.String()
+}
+
+func updateVisitCountByArtId(msg *Article) error {
+	targetDB := db.GetTargetDB()
+	if targetDB == nil {
+		return fmt.Errorf("targetDB 未初始化")
+	}
+	sourceDB := db.GetSourceDB()
+	if sourceDB == nil {
+		return fmt.Errorf("sourceDB 未初始化")
+	}
+	articleIdsStr := msg.ArticleId
+
+	// 分割文章ID，并过滤掉空字符串（处理末尾逗号的情况）
+	articleIdsRaw := strings.Split(articleIdsStr, ",")
+	articleIds := make([]string, 0, len(articleIdsRaw))
+	for _, id := range articleIdsRaw {
+		trimmed := strings.TrimSpace(id)
+		if trimmed != "" {
+			articleIds = append(articleIds, trimmed)
+		}
+	}
+
+	// 如果没有有效的文章ID，直接返回
+	if len(articleIds) == 0 {
+		zap.S().Debugf("没有有效的文章ID，跳过访问量更新")
+		return nil
+	}
+
+	// 检查 targetDB 中文章是否存在
+	var count int64
+	if err := targetDB.Table(models.TableNameArticleStatic).
+		Where("articleId IN ?", articleIds).
+		Count(&count).Error; err != nil {
+		return fmt.Errorf("检查文章是否存在失败: %v", err)
+	}
+
+	// 如果文章不存在，跳过更新
+	if count == 0 {
+		zap.S().Debugf("文章 %v 在 targetDB 中不存在，跳过访问量更新", articleIds)
+		return nil
+	}
+
+	// 从 sourceDB 批量查询访问量
+	type VisitCountResult struct {
+		PublishArticleId string `gorm:"column:publishArticleId"`
+		VisitCount       int    `gorm:"column:visitCount"`
+	}
+	var visitResults []VisitCountResult
+	sql := "SELECT sa.publishArticleId, sa.visitCount FROM T_SITEARTICLE sa WHERE sa.publishArticleId IN ? AND sa.selfCreate = 1"
+	if err := sourceDB.Raw(sql, articleIds).Scan(&visitResults).Error; err != nil {
+		return fmt.Errorf("从 sourceDB 查询访问量失败: %v", err)
+	}
+
+	// 如果没有查询到结果，跳过更新
+	if len(visitResults) == 0 {
+		zap.S().Debugf("文章 %v 在 sourceDB 中不存在或未发布，跳过访问量更新", articleIds)
+		return nil
+	}
+
+	// 构建访问量映射，方便批量更新
+	visitCountMap := make(map[string]int)
+	for _, result := range visitResults {
+		visitCountMap[result.PublishArticleId] = result.VisitCount
+	}
+
+	// 批量更新 targetDB 中的访问量
+	updatedCount := 0
+	for _, articleId := range articleIds {
+		if visitCount, exists := visitCountMap[articleId]; exists {
+			// 使用 Update 方法（单数形式）只更新 visitCount 字段，确保不影响其他字段
+			if err := targetDB.Table(models.TableNameArticleStatic).
+				Where("articleId = ?", articleId).
+				Update("visitCount", visitCount).Error; err != nil {
+				zap.S().Warnf("更新文章 %s 的访问量失败: %v", articleId, err)
+				continue
+			}
+			updatedCount++
+		}
+	}
+
+	zap.S().Infof("成功更新 %d 篇文章的访问量，文章ID: %v", updatedCount, articleIds)
+	return nil
 }

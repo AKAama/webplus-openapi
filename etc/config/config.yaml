@@ -18,7 +18,7 @@ sourceDB: #站群数据库
   port: 3306
   username: root
   password: "12344"
-  database: 3077
+  database: 3062
   schema: webplus307 #金仓、postgres需要填写
 targetDB: #此api服务的mysql8数据库
   host: 170.18.9.206 #170.18.9.182
@@ -30,17 +30,11 @@ targetDB: #此api服务的mysql8数据库
 # 响应字段配置，控制API返回哪些字段
 # 如果enabled_fields为空或不配置，则返回所有字段
 # 字段名不区分大小写，支持以下字段：
-# articleId, title, creatorName,
-# firstImgPath, summary, publishTime, lastModifyTime, visitUrl, content, attachment,
-# field1-field50 (扩展字段)
-# columnInfo这个字段是固定有的
+# articleId, title, creatorName,columnInfo这几个字段是固定有的
+# firstImgPath, summary, publishTime, lastModifyTime, visitUrl, content, attachment,VisitCount,Keywords
+# field1-field50 (扩展字段)按需要配置
 response_fields:
   enabled_fields:
-    - articleId
-    - title
-    - columnInfo
-    - publishTime
-    - visitUrl
 
 # 搜索配置：控制 keyWord 模糊匹配使用哪个字段
 search:

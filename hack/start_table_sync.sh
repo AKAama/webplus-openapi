@@ -3,8 +3,8 @@
 # -------------------------------
 # 基本变量定义
 # -------------------------------
-CONTAINER_NAME="webplus-openapi-recover"
-IMAGE_NAME="hub.sudytech.cn/webplus/webplus-openapi-recover"
+CONTAINER_NAME="webplus-openapi-sync"
+IMAGE_NAME="hub.sudytech.cn/webplus/webplus-openapi-sync"
 IMAGE_TAG="3.1.0"
 FULL_IMAGE_NAME="${IMAGE_NAME}:${IMAGE_TAG}"
 
@@ -29,10 +29,6 @@ check_env() {
     if [ ! -f "${HOST_CONFIG_FILE}" ]; then
         print_error "配置文件不存在: ${HOST_CONFIG_FILE}"
         exit 1
-    fi
-    if [ ! -d "${HOST_DATA_DIR}" ]; then
-        print_warn "数据目录不存在，自动创建: ${HOST_DATA_DIR}"
-        mkdir -p "${HOST_DATA_DIR}"
     fi
 }
 
@@ -71,6 +67,7 @@ start_container() {
 
     docker run -d --name "${CONTAINER_NAME}" \
         -v "${HOST_CONFIG_FILE}:${CONTAINER_CONFIG_PATH}" \
+        -v "${HOST_DATA_DIR}:${CONTAINER_DATA_PATH}" \
         "${FULL_IMAGE_NAME}" \
 
     # shellcheck disable=SC2181

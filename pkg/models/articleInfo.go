@@ -29,6 +29,8 @@ type ArticleInfo struct {
 	CreateTime     string       `json:"createTime"  gorm:"column:createTime"`        // 文章创建时间
 	Content        string       `json:"content" gorm:"column:content"`               // 文章内容
 	Attachment     []Attachment `json:"attachment" gorm:"-"`
+	VisitCount     int          `json:"visitCount" gorm:"column:visitCount"`
+	Keywords       string       `json:"keywords" gorm:"column:keywords"`
 	ArticleFields
 }
 type Attachment struct {

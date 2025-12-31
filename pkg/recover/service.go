@@ -144,6 +144,8 @@ func (r *ArticleRepository) GetArticleById(article *models.ArticleInfo) (*models
 		PublishTime:    publishPtr,
 		PublisherName:  queryResult.PublisherName,
 		PublishOrgName: queryResult.PublishOrgName,
+		VisitCount:     queryResult.VisitCount,
+		Keywords:       queryResult.Keywords,
 		// 初始化切片字段
 		ColumnId:   []string{},
 		ColumnName: []string{},

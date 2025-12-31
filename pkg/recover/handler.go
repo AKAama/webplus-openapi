@@ -310,6 +310,8 @@ func (as *ArticleService) processArticle(articleRef ArticleRef) ProcessResult {
 		"publishTime":    articleInfo.PublishTime,
 		"lastModifyTime": articleInfo.LastModifyTime,
 		"visitUrl":       articleInfo.VisitUrl,
+		"visitCount":     articleInfo.VisitCount,
+		"keywords":       articleInfo.Keywords,
 		"createTime":     articleInfo.CreateTime,
 		"firstImgPath":   articleInfo.FirstImgPath,
 		"imageDir":       articleInfo.ImageDir,

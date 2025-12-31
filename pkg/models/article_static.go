@@ -23,6 +23,8 @@ type ArticleStatic struct {
 	CreateTime     string       `json:"createTime"  gorm:"column:createTime"`        //	文章创建时间
 	Content        string       `json:"content" gorm:"column:content"`               //	文章内容
 	VisitUrl       string       `json:"visitUrl" gorm:"column:visitUrl"`
+	VisitCount     int          `json:"visitCount" gorm:"column:visitCount"` //访问计数
+	Keywords       string       `json:"keywords" gorm:"column:keywords"`
 	Attachment     []Attachment `json:"attachment" gorm:"-"`
 	ArticleFields
 }

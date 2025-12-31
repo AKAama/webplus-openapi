@@ -177,6 +177,8 @@ func (h *Handler) GetArticles(c *gin.Context) {
 		FirstImgPath   string     `gorm:"column:firstImgPath"`
 		Content        string     `gorm:"column:content"`
 		VisitUrl       string     `gorm:"column:visitUrl"`
+		VisitCount     int        `gorm:"column:visitCount"`
+		Keywords       string     `gorm:"column:keywords"`
 	}
 
 	query := targetDB.Table(models.TableNameArticleStatic)
@@ -292,6 +294,8 @@ func (h *Handler) GetArticles(c *gin.Context) {
 			VisitUrl:       r.VisitUrl,
 			FirstImgPath:   r.FirstImgPath,
 			Content:        r.Content,
+			VisitCount:     r.VisitCount,
+			Keywords:       r.Keywords,
 		}
 
 		if cols, ok := columnMap[r.ArticleId]; ok {
@@ -404,6 +408,8 @@ func (h *Handler) buildArticleResponse(a models.ArticleInfo) gin.H {
 		"visitUrl":       a.VisitUrl,
 		"content":        a.Content,
 		"attachment":     a.Attachment,
+		"visitCount":     a.VisitCount,
+		"keywords":       a.Keywords,
 	}
 
 	// 注入扩展字段

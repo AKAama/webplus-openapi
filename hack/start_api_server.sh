@@ -5,17 +5,15 @@
 # -------------------------------
 CONTAINER_NAME="webplus-openapi-server"
 IMAGE_NAME="hub.sudytech.cn/webplus/webplus-openapi-server"
-IMAGE_TAG="2.0.0"
+IMAGE_TAG="3.1.0"
 FULL_IMAGE_NAME="${IMAGE_NAME}:${IMAGE_TAG}"
 
 # 主机配置目录
 HOST_ETC_DIR="/opt/sudytech/webplus-openapi/etc"
-HOST_CONFIG_FILE="${HOST_ETC_DIR}/config.yaml"
-HOST_DATA_DIR="${HOST_ETC_DIR}/data"
+HOST_CONFIG_FILE="${HOST_ETC_DIR}/config/config.yaml"
 
 # 容器路径
 CONTAINER_CONFIG_PATH="/app/etc/config/config.yaml"
-CONTAINER_DATA_PATH="/app/etc/data"
 
 # 端口配置
 HOST_PORT=8700
