@@ -780,10 +780,12 @@ func (h *Handler) GetColumns(c *gin.Context) {
 
 	// 转换为响应格式
 	list := make([]ColumnInfo, len(columns))
-	for i, col := range columns {
+	for i := range columns {
 		//处理URL
-		if columns[i].Link == "" {
-			columns[i].Link = generateUrl(columns[i])
+		col := &columns[i] // 获取指针，避免拷贝
+
+		if col.Link == "" {
+			col.Link = generateUrl(*col) // 注意：如果 generateUrl 需要值，就传 *col；如果接受指针，就传 col
 		}
 		//处理全路径
 		allPathIds := h.extractIdsFromPath(col.Path)
@@ -800,7 +802,7 @@ func (h *Handler) GetColumns(c *gin.Context) {
 			}
 		}
 		// 将数字 path 转换为中文 path
-		chinesePath := h.convertPathToChineseWithCache(col.Path, columnIdToName, &col, allPathIds)
+		chinesePath := h.convertPathToChineseWithCache(col.Path, columnIdToName, col, allPathIds)
 
 		list[i] = ColumnInfo{
 			ColumnId:       col.Id,
@@ -880,36 +882,106 @@ func (h *Handler) convertPathToChineseWithCache(path string, columnIdToName map[
 	return result
 }
 
-func generateUrl(column models.TColumn) string {
-	var url string
+// getSiteDomainName 获取站点的域名，支持通过 T_PUBLISHSITE 的 parentId 查找父站点域名
+// siteId: 站点ID
+// dummyName: 可选的虚拟名称，如果提供了且站点没有自己的域名，会拼接到父站点域名后面
+// 返回: 域名（不包含协议），如果找不到则返回空字符串
+func getSiteDomainName(siteId int) string {
 	targetDB := db.GetTargetDB()
 	if targetDB == nil {
 		return ""
 	}
+
+	// 查询站点信息
 	var site models.TSite
-	if err := targetDB.Table(models.TableNameTSite).Where("ID = ?", column.SiteId).First(&site).Error; err != nil {
-		return ""
-	}
-	if site.DomainName == "" {
-		return ""
-	}
-	parts := strings.Split(site.DomainName, ",")
-	var firstDomain string
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		if trimmed != "" {
-			firstDomain = trimmed
-			break
-		}
-	}
-	if firstDomain == "" {
+	if err := targetDB.Table(models.TableNameTSite).Where("ID = ?", siteId).First(&site).Error; err != nil {
 		return ""
 	}
 
-	url = firstDomain + "/" + column.UrlName + "/list.htm"
+	// 情况1：站点有自己的 domainName
+	if site.DomainName != "" {
+		re := regexp.MustCompile(`[,，]+`)
+		parts := re.Split(site.DomainName, -1)
+		for _, part := range parts {
+			trimmed := strings.TrimSpace(part)
+			if trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+
+	// 情况2：站点没有 domainName，通过 T_PUBLISHSITE 的 parentId 查找父站点域名
+	dummyName := site.DummyName
+	var publishSite models.TPublishSite
+	if err := targetDB.Table(models.TableNameTPubSite).
+		Where("siteId = ? AND deleted = ?", siteId, 0).
+		First(&publishSite).Error; err != nil {
+		return ""
+	}
+
+	// 如果当前站点有 parentId
+	if publishSite.ParentId > 0 {
+		// 通过 parentId 找到父发布记录
+		var parentPublishSite models.TPublishSite
+		if err := targetDB.Table(models.TableNameTPubSite).
+			Where("id = ? AND deleted = ?", publishSite.ParentId, 0).
+			First(&parentPublishSite).Error; err != nil {
+			return ""
+		}
+
+		// 获取父发布记录的 siteId
+		parentSiteId := parentPublishSite.SiteId
+		if parentSiteId > 0 {
+			// 查询父站点信息
+			var parentSite models.TSite
+			if err := targetDB.Table(models.TableNameTSite).
+				Where("ID = ?", parentSiteId).
+				First(&parentSite).Error; err != nil {
+				return ""
+			}
+
+			// 获取父站点的第一个域名
+			if parentSite.DomainName != "" {
+				re := regexp.MustCompile(`[,，]+`)
+				parts := re.Split(parentSite.DomainName, -1)
+				var parentDomain string
+				for _, part := range parts {
+					trimmed := strings.TrimSpace(part)
+					if trimmed != "" {
+						parentDomain = trimmed
+						break
+					}
+				}
+
+				// 拼接父站点域名 + 自己的 DummyName（如果提供了）
+				if parentDomain != "" {
+					if dummyName != "" {
+						return parentDomain + "/" + dummyName
+					}
+					return parentDomain
+				}
+			}
+		}
+	}
+
+	return ""
+}
+
+func generateUrl(column models.TColumn) string {
+	targetDB := db.GetTargetDB()
+	if targetDB == nil {
+		return ""
+	}
+
+	// 使用可复用的函数获取站点域名
+	domainName := getSiteDomainName(column.SiteId)
+	if domainName == "" {
+		return ""
+	}
+
+	url := domainName + "/" + column.UrlName + "/list.htm"
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		url = "http://" + url
 	}
 	return url
-
 }

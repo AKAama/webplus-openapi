@@ -151,7 +151,7 @@ func runSyncServer(cfg *sync.Config) error {
 	}
 
 	// 等待退出信号
-	zap.S().Info("同步服务已启动，等待退出信号...")
+	zap.S().Info("同步服务已启动...")
 	<-sigChan
 	zap.S().Info("接收到退出信号，正在关闭同步服务...")
 	cancel()

@@ -18,7 +18,7 @@ sourceDB: #站群数据库
   port: 3306
   username: root
   password: "12344"
-  database: 3062
+  database: 3077
   schema: webplus307 #金仓、postgres需要填写
 targetDB: #此api服务的mysql8数据库
   host: 170.18.9.206 #170.18.9.182
