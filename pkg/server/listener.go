@@ -222,24 +222,24 @@ func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
 
 	// 使用临时结构体避免切片字段问题
 	type ArticleQueryResult struct {
-		ArticleId      string     `gorm:"column:articleId"`
-		Title          string     `gorm:"column:title"`
-		FolderId       string     `gorm:"column:folderId"`
-		ShortTitle     string     `gorm:"column:shortTitle"`
-		AuxiliaryTitle string     `gorm:"column:auxiliaryTitle"`
-		CreatorName    string     `gorm:"column:creatorName"`
-		Summary        string     `gorm:"column:summary"`
-		PublishTime    *time.Time `gorm:"column:publishTime"`
-		PublisherName  string     `gorm:"column:publisherName"`
-		PublishOrgName string     `gorm:"column:publishOrgName"`
-		FirstImgPath   string     `gorm:"column:firstImgPath"`
-		ImageDir       string     `gorm:"column:imageDir"`
-		FilePath       string     `gorm:"column:filePath"`
-		SiteId         string     `gorm:"column:siteId"`
-		SiteName       string     `gorm:"column:siteName"`
-		VisitUrl       string     `gorm:"column:visitUrl"`
-		ColumnId       string     `gorm:"column:columnId"`
-		ColumnName     string     `gorm:"column:columnName"`
+		ArticleId      string `gorm:"column:articleId"`
+		Title          string `gorm:"column:title"`
+		FolderId       string `gorm:"column:folderId"`
+		ShortTitle     string `gorm:"column:shortTitle"`
+		AuxiliaryTitle string `gorm:"column:auxiliaryTitle"`
+		CreatorName    string `gorm:"column:creatorName"`
+		Summary        string `gorm:"column:summary"`
+		PublishTime    string `gorm:"column:publishTime"`
+		PublisherName  string `gorm:"column:publisherName"`
+		PublishOrgName string `gorm:"column:publishOrgName"`
+		FirstImgPath   string `gorm:"column:firstImgPath"`
+		ImageDir       string `gorm:"column:imageDir"`
+		FilePath       string `gorm:"column:filePath"`
+		SiteId         string `gorm:"column:siteId"`
+		SiteName       string `gorm:"column:siteName"`
+		VisitUrl       string `gorm:"column:visitUrl"`
+		ColumnId       string `gorm:"column:columnId"`
+		ColumnName     string `gorm:"column:columnName"`
 		models.ArticleFields
 	}
 
@@ -283,7 +283,7 @@ func (w *Manager) QueryArticleById(result *Article) *models.ArticleInfo {
 		AuxiliaryTitle: queryResult.AuxiliaryTitle,
 		CreatorName:    queryResult.CreatorName,
 		Summary:        queryResult.Summary,
-		PublishTime:    queryResult.PublishTime,
+		PublishTime:    ParsePgTime(queryResult.PublishTime),
 		PublisherName:  queryResult.PublisherName,
 		PublishOrgName: queryResult.PublishOrgName,
 		FirstImgPath:   queryResult.FirstImgPath,
@@ -375,6 +375,26 @@ func querySiteInfo(siteIdStr string) string {
 		return ""
 	}
 	return siteName
+}
+
+func ParsePgTime(raw string) *time.Time {
+	if raw == "" {
+		return nil
+	}
+	// 尝试多种常见的 Postgres 字符串时间格式
+	layouts := []string{
+		"2006-01-02 15:04:05.999999",
+		"2006-01-02 15:04:05",
+		time.RFC3339,
+	}
+
+	for _, layout := range layouts {
+		t, err := time.Parse(layout, raw)
+		if err == nil {
+			return &t
+		}
+	}
+	return nil
 }
 
 // 处理文章新增还是修改：写入 targetDB 的 article_static / article_dynamic
